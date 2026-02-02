@@ -82,28 +82,53 @@ export default function Dashboard() {
   const [readings, setReadings] = useState<Reading[]>([]);
 
   // Fetch DB data every 5 seconds
-  useEffect(() => {
-    async function load() {
-      try {
-        const res = await fetch("/api/readings");
-        const json = await res.json();
-        setReadings(json);
-      } catch (err) {
-        console.error("Failed to load readings:", err);
-      }
-    }
+//  useEffect(() => {
+//    async function load() {
+//      try {
+//        const res = await fetch("/api/readings");
+//        const json = await res.json();
+//        setReadings(json);
+//      } catch (err) {
+//        console.error("Failed to load readings:", err);
+//      }
+//    }
 
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, []);
+//    load();
+//    const interval = setInterval(load, 5000);
+//    return () => clearInterval(interval);
+//  }, []);
+
+  useEffect(() => {
+  async function load() {
+    try {
+      const res = await fetch("/api/readings");
+      const json = await res.json();
+
+      // Ensure it's always an array
+      if (Array.isArray(json)) {
+        setReadings(json);
+      } else {
+        console.error("API returned non-array:", json);
+        setReadings([]); // fallback
+      }
+    } catch (err) {
+      console.error("Failed to load readings:", err);
+      setReadings([]); // fallback
+    }
+  }
+
+  load();
+  const interval = setInterval(load, 5000);
+  return () => clearInterval(interval);
+}, []);
+
 
   const latest = readings[0];
 
   const current = latest
     ? {
         temp: latest.bme_temp,
-        hum: latest.bme_hum,
+        hum: latest.scd_hum,
         press: latest.bme_press,
         co2: latest.scd_co2,
       }

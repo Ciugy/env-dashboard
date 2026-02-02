@@ -1,4 +1,4 @@
-import pyfirmata
+#import pyfirmata
 import sqlite3
 import serial
 import json
@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 
 # Open database
-conn = sqlite3.connect("sensor_data.db")
+conn = sqlite3.connect("./src/app/api/data/sensor_data.db")
 cursor = conn.cursor()
 
 # Create structured table
@@ -65,7 +65,7 @@ while True:
             INSERT INTO sensor_data (
                 timestamp, bme_temp,  bme_press, bme_gas,
                 scd_co2,  scd_hum
-            ) VALUES (?, ?, ?, ?, ?)
+            ) VALUES (? ,?, ?, ?, ?, ?)
         """, (
             ts,
             data.get("bme_temp"),
