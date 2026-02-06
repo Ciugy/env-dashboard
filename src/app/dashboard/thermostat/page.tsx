@@ -268,6 +268,29 @@ export default function ThermostatPage() {
                   Current: <span className="tabular-nums">{currentTemp.toFixed(1)}°</span>
                 </div>
 
+                {/* Real sensor reading display */}
+                {sensorReadings.length > 0 && (
+                  <div className="mt-2 text-xs text-center opacity-80">
+                    <span className="font-medium">Sensor: </span>
+                    {sensorReadings[0].temp.toFixed(1)}°C
+                    {sensorReadings[1] && (
+                      <span className="ml-2">
+                        {/* Trend arrow */}
+                        {sensorReadings[0].temp > sensorReadings[1].temp ? (
+                          <span className="text-green-500">▲</span>
+                        ) : sensorReadings[0].temp < sensorReadings[1].temp ? (
+                          <span className="text-red-500">▼</span>
+                        ) : (
+                          <span className="opacity-40">▬</span>
+                        )}
+                      </span>
+                    )}
+                    <span className="ml-2 opacity-60">
+                      (updated {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
+                    </span>
+                  </div>
+                )}
+
                 <div className="mt-4 flex items-center gap-3">
                   <button
                   className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
