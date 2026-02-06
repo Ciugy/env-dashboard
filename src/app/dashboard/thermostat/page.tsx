@@ -25,7 +25,7 @@ function getNowMinutes() {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-type SensorData = { temp: number; hum: number; co2: number; press?: number; };
+type SensorData = { temp: number; hum: number; co2: number; press?: number; timestamp?: string; };
 
 export default function ThermostatPage() {
   // "Sensor" reading (replace later with real sensor value)
@@ -269,26 +269,37 @@ export default function ThermostatPage() {
                 </div>
 
                 {/* Real sensor reading display */}
-                {sensorReadings.length > 0 && (
+                {sensorReadings.length > 0 ? (
                   <div className="mt-2 text-xs text-center opacity-80">
-                    <span className="font-medium">Sensor: </span>
-                    {sensorReadings[0].temp.toFixed(1)}°C
-                    {sensorReadings[1] && (
-                      <span className="ml-2">
-                        {/* Trend arrow */}
-                        {sensorReadings[0].temp > sensorReadings[1].temp ? (
-                          <span className="text-green-500">▲</span>
-                        ) : sensorReadings[0].temp < sensorReadings[1].temp ? (
-                          <span className="text-red-500">▼</span>
-                        ) : (
-                          <span className="opacity-40">▬</span>
+                    <span className="font-medium">Sensor reading:</span>
+                    {" "}
+                    {sensorReadings[0].temp !== undefined ? (
+                      <>
+                        {sensorReadings[0].temp.toFixed(1)}°C
+                        {sensorReadings[1] && (
+                          <span className="ml-2">
+                            {/* Trend arrow */}
+                            {sensorReadings[0].temp > sensorReadings[1].temp ? (
+                              <span className="text-green-500" title="Rising">▲</span>
+                            ) : sensorReadings[0].temp < sensorReadings[1].temp ? (
+                              <span className="text-red-500" title="Falling">▼</span>
+                            ) : (
+                              <span className="opacity-40" title="Stable">▬</span>
+                            )}
+                          </span>
                         )}
-                      </span>
+                        {sensorReadings[0].timestamp && (
+                          <span className="ml-2 opacity-60">
+                            (updated {new Date(sensorReadings[0].timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-red-400 ml-2">No temp data</span>
                     )}
-                    <span className="ml-2 opacity-60">
-                      (updated {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
-                    </span>
                   </div>
+                ) : (
+                  <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
                 )}
 
                 <div className="mt-4 flex items-center gap-3">
