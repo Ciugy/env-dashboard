@@ -29,7 +29,6 @@ type SensorData = { temp: number; hum: number; co2: number; press?: number; time
 
 export default function ThermostatPage() {
   const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.3);
-  // sensor readings array
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
 
   useEffect(() => {
@@ -45,14 +44,11 @@ export default function ThermostatPage() {
             co2: row.scd_co2,
             timestamp: row.timestamp,
           }));
-
           setSensorReadings(mapped);
         } else {
-          console.error("API returned non-array:", json);
           setSensorReadings([]);
         }
-      } catch (err) {
-        console.error("Failed to load readings:", err);
+      } catch {
         setSensorReadings([]);
       }
     }
@@ -62,62 +58,47 @@ export default function ThermostatPage() {
     return () => clearInterval(interval);
   }, []);
 
-
-
-  // Thermostat state
   const [mode, setMode] = useState<Mode>("HEAT");
-  const [targetTemp, setTargetTemp] = useState(23.0); // manual setpoint
+  const [targetTemp, setTargetTemp] = useState(23.0);
   const [useSchedule, setUseSchedule] = useState(true);
 
-  // Daily schedule: automatically applied setpoints
   const [schedule, setSchedule] = useState([
-    { at: 6 * 60, temp: 22.0 },   // 6:00
-    { at: 9 * 60, temp: 20.0 },   // 9:00
-    { at: 17 * 60, temp: 22.5 },  // 17:00
-    { at: 22 * 60, temp: 19.5 },  // 22:00
+    { at: 6 * 60, temp: 22.0 },
+    { at: 9 * 60, temp: 20.0 },
+    { at: 17 * 60, temp: 22.5 },
+    { at: 22 * 60, temp: 19.5 },
   ]);
 
-  // Hysteresis (prevents relay/triac chatter)
-  const hysteresis = 0.3;
+  function computeScheduledTemp(schedule: { at: number; temp: number }[]) {
+    if (!schedule.length) return targetTemp;
 
-  // Determine scheduled setpoint "for now"
-  const nowMinutes = useMemo(() => getNowMinutes(), []);
-  const scheduledTemp = useMemo(() => {
-    const sorted = [...schedule].sort((a, b) => a.at - b.at);
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
 
-    // If schedule is empty, fall back to manual setpoint
-    if (sorted.length === 0) return targetTemp;
+    const active = schedule
+      .filter((s) => s.at <= minutes)
+      .sort((a, b) => b.at - a.at)[0];
 
-    let chosen = sorted[0];
-    for (const s of sorted) {
-      if (s.at <= nowMinutes) chosen = s;
+    if (!active) {
+      return schedule[schedule.length - 1].temp;
     }
-    return chosen.temp;
-  }, [schedule, nowMinutes, targetTemp]);
 
+    return active.temp;
+  }
 
+  const scheduledTemp = computeScheduledTemp(schedule);
   const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
-  
-  useEffect(() => {
-    if (schedule.length === 0) setUseSchedule(false);
-  }, [schedule.length]);
+
+  const hysteresis = 0.3;
 
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
-    if (mode === "AUTO") {
-      // heating with a lamp, so AUTO = behave like HEAT
-    }
-    // Simple hysteresis control:
-    // ON when current < setpoint - hys
-    // OFF when current > setpoint + hys
-    // use the currentTemp state (simulated sensor reading) for control
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
   useEffect(() => {
     const t = setInterval(() => {
       setCurrentTemp((v) => {
-        // If heater is ON, temp rises slowly, otherwise it drifts down slightly
         const drift = heatCall ? 0.03 : -0.015;
         return Math.round((v + drift) * 10) / 10;
       });
@@ -125,7 +106,6 @@ export default function ThermostatPage() {
     return () => clearInterval(t);
   }, [heatCall]);
 
-  // Dial interaction
   const minTemp = 10;
   const maxTemp = 30;
 
@@ -138,16 +118,11 @@ export default function ThermostatPage() {
     const x = e.clientX - cx;
     const y = e.clientY - cy;
 
-    // angle: -pi..pi (0 on +x axis). We want top to be 0-ish like a thermostat
-    const angle = Math.atan2(y, x); // -pi..pi
-    // Map angle to 0..1 over a 300° sweep (Nest-like)
-    // We'll use sweep from -210° to +30° (in radians)
+    const angle = Math.atan2(y, x);
     const start = (-210 * Math.PI) / 180;
     const end = (30 * Math.PI) / 180;
 
     let a = angle;
-    // normalize into range by wrapping
-    // Convert to equivalent angle close to our sweep
     while (a < start) a += 2 * Math.PI;
     while (a > start + 2 * Math.PI) a -= 2 * Math.PI;
 
@@ -157,17 +132,16 @@ export default function ThermostatPage() {
     const temp = minTemp + ratio * (maxTemp - minTemp);
     const snapped = roundTo(temp, 0.5);
 
-    // If schedule is on, dragging should switch to manual (typical thermostat behavior)
     setUseSchedule(false);
     setTargetTemp(snapped);
   }
 
-  // Progress ring
   const ratio = (effectiveSetpoint - minTemp) / (maxTemp - minTemp);
   const ring = clamp(ratio, 0, 1);
   const circumference = 2 * Math.PI * 88;
   const dash = circumference * ring;
   const gap = circumference - dash;
+
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
@@ -316,10 +290,10 @@ export default function ThermostatPage() {
                       <span className="text-red-400 ml-2">No temp data</span>
                     )}
                   </div>
-                );
-              })() : (
-                <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
-              )}
+              );
+            })() : (
+              <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
+            )}
 
 
                 <div className="mt-4 flex items-center gap-3">
@@ -380,6 +354,7 @@ export default function ThermostatPage() {
             </div>
           </div>
         </div>
+
 
         {/* Schedule */}
         <div className="bg-zinc-950/40 rounded-2xl border border-zinc-800/60 p-6">
