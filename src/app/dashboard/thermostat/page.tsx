@@ -30,31 +30,32 @@ type SensorData = { temp: number; hum: number; co2: number; press?: number; };
 export default function ThermostatPage() {
   // "Sensor" reading (replace later with real sensor value)
   const [currentTemp, setCurrentTemp] = useState(22.3);
-  const [SensorData, setReadings] = useState<SensorData[]>([]);
+  // sensor readings array (rename to avoid collision with the type name)
+  const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
 
-    useEffect(() => {
-  async function load() {
-    try {
-      const res = await fetch("/api/readings");
-      const json = await res.json();
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/readings");
+        const json = await res.json();
 
-      // Ensure it's always an array
-      if (Array.isArray(json)) {
-        setReadings(json);
-      } else {
-        console.error("API returned non-array:", json);
-        setReadings([]); // fallback
+        // Ensure it's always an array
+        if (Array.isArray(json)) {
+          setSensorReadings(json);
+        } else {
+          console.error("API returned non-array:", json);
+          setSensorReadings([]); // fallback
+        }
+      } catch (err) {
+        console.error("Failed to load readings:", err);
+        setSensorReadings([]); // fallback
       }
-    } catch (err) {
-      console.error("Failed to load readings:", err);
-      setReadings([]); // fallback
     }
-  }
 
-  load();
-  const interval = setInterval(load, 5000);
-  return () => clearInterval(interval);
-}, []);
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Thermostat state
   const [mode, setMode] = useState<Mode>("HEAT");
@@ -75,24 +76,24 @@ export default function ThermostatPage() {
   // Determine scheduled setpoint "for now"
   const nowMinutes = useMemo(() => getNowMinutes(), []);
   const scheduledTemp = useMemo(() => {
-  const sorted = [...schedule].sort((a, b) => a.at - b.at);
+    const sorted = [...schedule].sort((a, b) => a.at - b.at);
 
-  // If schedule is empty, fall back to manual setpoint
-  if (sorted.length === 0) return targetTemp;
+    // If schedule is empty, fall back to manual setpoint
+    if (sorted.length === 0) return targetTemp;
 
-  let chosen = sorted[0];
-  for (const s of sorted) {
-    if (s.at <= nowMinutes) chosen = s;
-  }
-  return chosen.temp;
-}, [schedule, nowMinutes, targetTemp]);
+    let chosen = sorted[0];
+    for (const s of sorted) {
+      if (s.at <= nowMinutes) chosen = s;
+    }
+    return chosen.temp;
+  }, [schedule, nowMinutes, targetTemp]);
 
 
   const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
   
   useEffect(() => {
-  if (schedule.length === 0) setUseSchedule(false);
-}, [schedule.length]);
+    if (schedule.length === 0) setUseSchedule(false);
+  }, [schedule.length]);
 
   // Closed-loop decision: should heater be ON?
   const heatCall = useMemo(() => {
@@ -104,6 +105,7 @@ export default function ThermostatPage() {
     // Simple hysteresis control:
     // ON when current < setpoint - hys
     // OFF when current > setpoint + hys
+    // use the currentTemp state (simulated sensor reading) for control
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
