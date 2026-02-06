@@ -25,11 +25,47 @@ function getNowMinutes() {
   return d.getHours() * 60 + d.getMinutes();
 }
 
+type Reading = {
+  timestamp: string;
+  bme_temp: number;
+  bme_hum: number;
+  bme_press: number;
+  bme_gas: number;
+  scd_co2: number;
+  scd_temp: number;
+  scd_hum: number;
+};
+
 export default function ThermostatPage() {
   // "Sensor" reading (replace later with real sensor value)
   const [currentTemp, setCurrentTemp] = useState(22.3);
+  const [readings, setReadings] = useState<Reading[]>([]);
 
-  // --- Thermostat state ---
+    useEffect(() => {
+  async function load() {
+    try {
+      const res = await fetch("/api/readings");
+      const json = await res.json();
+
+      // Ensure it's always an array
+      if (Array.isArray(json)) {
+        setReadings(json);
+      } else {
+        console.error("API returned non-array:", json);
+        setReadings([]); // fallback
+      }
+    } catch (err) {
+      console.error("Failed to load readings:", err);
+      setReadings([]); // fallback
+    }
+  }
+
+  load();
+  const interval = setInterval(load, 5000);
+  return () => clearInterval(interval);
+}, []);
+
+  // Thermostat state
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0); // manual setpoint
   const [useSchedule, setUseSchedule] = useState(true);
