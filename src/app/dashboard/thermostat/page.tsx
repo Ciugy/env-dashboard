@@ -301,7 +301,7 @@ export default function ThermostatPage() {
                     )}
                   </div>
                 ) : (
-                  <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
+                  <div className="mt-2 text-xs text-center opacity-60">Reading</div>
                 )}
 
                 <div className="mt-4 flex items-center gap-3">
