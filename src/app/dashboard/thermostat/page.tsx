@@ -39,12 +39,14 @@ export default function ThermostatPage() {
         const json = await res.json();
 
         if (Array.isArray(json)) {
-          setSensorReadings(json);
+          const mapped = json.map((row) => ({
+            temp: row.bme_temp,
+            hum: row.scd_hum,
+            co2: row.scd_co2,
+            timestamp: row.timestamp,
+          }));
 
-          if (json.length > 0) {
-            const latest = json[json.length - 1];
-            setCurrentTemp(latest.bme_temp);
-          }
+          setSensorReadings(mapped);
         } else {
           console.error("API returned non-array:", json);
           setSensorReadings([]);
@@ -59,6 +61,7 @@ export default function ThermostatPage() {
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, []);
+
 
 
   // Thermostat state
