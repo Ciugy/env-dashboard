@@ -28,9 +28,8 @@ function getNowMinutes() {
 type SensorData = { temp: number; hum: number; co2: number; press?: number; timestamp?: string; };
 
 export default function ThermostatPage() {
-  // "Sensor" reading (replace later with real sensor value)
-  const [currentTemp, setCurrentTemp] = useState(22.3);
-  // sensor readings array (rename to avoid collision with the type name)
+  const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.3);
+  // sensor readings array
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
 
   useEffect(() => {
@@ -39,16 +38,20 @@ export default function ThermostatPage() {
         const res = await fetch("/api/readings");
         const json = await res.json();
 
-        // Ensure it's always an array
         if (Array.isArray(json)) {
           setSensorReadings(json);
+
+          if (json.length > 0) {
+            const latest = json[json.length - 1];
+            setCurrentTemp(latest.bme_temp);
+          }
         } else {
           console.error("API returned non-array:", json);
-          setSensorReadings([]); // fallback
+          setSensorReadings([]);
         }
       } catch (err) {
         console.error("Failed to load readings:", err);
-        setSensorReadings([]); // fallback
+        setSensorReadings([]);
       }
     }
 
@@ -56,6 +59,7 @@ export default function ThermostatPage() {
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, []);
+
 
   // Thermostat state
   const [mode, setMode] = useState<Mode>("HEAT");
@@ -95,12 +99,10 @@ export default function ThermostatPage() {
     if (schedule.length === 0) setUseSchedule(false);
   }, [schedule.length]);
 
-  // Closed-loop decision: should heater be ON?
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "AUTO") {
       // heating with a lamp, so AUTO = behave like HEAT
-      // (Later you could add cooling logic here if needed.)
     }
     // Simple hysteresis control:
     // ON when current < setpoint - hys
