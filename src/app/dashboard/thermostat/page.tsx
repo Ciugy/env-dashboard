@@ -25,21 +25,12 @@ function getNowMinutes() {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-type Reading = {
-  timestamp: string;
-  bme_temp: number;
-  bme_hum: number;
-  bme_press: number;
-  bme_gas: number;
-  scd_co2: number;
-  scd_temp: number;
-  scd_hum: number;
-};
+type SensorData = { temp: number; hum: number; co2: number; press?: number; };
 
 export default function ThermostatPage() {
   // "Sensor" reading (replace later with real sensor value)
   const [currentTemp, setCurrentTemp] = useState(22.3);
-  const [readings, setReadings] = useState<Reading[]>([]);
+  const [SensorData, setReadings] = useState<SensorData[]>([]);
 
     useEffect(() => {
   async function load() {
@@ -116,7 +107,6 @@ export default function ThermostatPage() {
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
-  // Demo: slowly vary current temp so you can see behavior
   useEffect(() => {
     const t = setInterval(() => {
       setCurrentTemp((v) => {

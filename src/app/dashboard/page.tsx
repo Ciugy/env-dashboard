@@ -1,428 +1,230 @@
-// "use client";
-
-// import { useEffect, useState } from "react";
-// import UserLocation from "@/components/ui/layout/Location";
-
-// import {
-//   LineChart,
-//   Line,
-//   Area,
-//   XAxis,
-//   YAxis,
-//   Tooltip,
-//   ResponsiveContainer,
-//   CartesianGrid,
-// } from "recharts";
-
-// type Reading = {
-//   timestamp: string;
-//   bme_temp: number;
-//   bme_hum: number;
-//   bme_press: number;
-//   bme_gas: number;
-//   scd_co2: number;
-//   scd_temp: number;
-//   scd_hum: number;
-// };
-
-// function Tile({
-//   title,
-//   value,
-//   unit,
-//   footer,
-// }: {
-//   title: string;
-//   value: string;
-//   unit?: string;
-//   footer?: string;
-// }) {
-//   return (
-//     <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm hover:shadow-lg transition-shadow duration-200 min-h-[110px]">
-//       <div className="text-sm opacity-60">{title}</div>
-//       <div className="mt-2 text-4xl sm:text-5xl font-semibold">
-//         {value} <span className="text-xs opacity-60">{unit}</span>
-//       </div>
-//       {footer ? <div className="mt-2 text-xs opacity-70">{footer}</div> : null}
-//       <div className="mt-3 h-10">
-//         <ResponsiveContainer width="100%" height="100%">
-//           <LineChart data={[{t:'1', v:1},{t:'2',v:2},{t:'3',v:1.5},{t:'4',v:2.2}] }>
-//             <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={2} dot={false} />
-//           </LineChart>
-//         </ResponsiveContainer>
-//       </div>
-//     </div>
-//   );
-// }
-
-// function StatusBadge({ co2 }: { co2: number }) {
-//   let label = "Good";
-//   let cls =
-//     "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200";
-
-//   if (co2 >= 800 && co2 < 1200) {
-//     label = "Moderate";
-//     cls =
-//       "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200";
-//   } else if (co2 >= 1200) {
-//     label = "Poor";
-//     cls = "bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200";
-//   }
-
-//   return (
-//     <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium ${cls}`}>
-//       <span aria-hidden>
-//         {co2 >= 1200 ? "🔥" : co2 >= 800 ? "⚠️" : "✅"}
-//       </span>
-//       {label}
-//     </span>
-//   );
-// }
-
-// export default function Dashboard() {
-//   const [readings, setReadings] = useState<Reading[]>([]);
-
-//   // Fetch DB data every 5 seconds
-//   useEffect(() => {
-//   async function load() {
-//     try {
-//       const res = await fetch("/api/readings");
-//       const json = await res.json();
-
-//       // Ensure it's always an array
-//       if (Array.isArray(json)) {
-//         setReadings(json);
-//       } else {
-//         console.error("API returned non-array:", json);
-//         setReadings([]); // fallback
-//       }
-//     } catch (err) {
-//       console.error("Failed to load readings:", err);
-//       setReadings([]); // fallback
-//     }
-//   }
-
-//   load();
-//   const interval = setInterval(load, 5000);
-//   return () => clearInterval(interval);
-// }, []);
-
-
-//   const latest = readings[0];
-
-//   const current = latest
-//     ? {
-//         temp: latest.bme_temp,
-//         hum: latest.scd_hum,
-//         press: latest.bme_press,
-//         co2: latest.scd_co2,
-//       }
-//     : {
-//         temp: 0,
-//         hum: 0,
-//         press: 0,
-//         co2: 0,
-//       };
-
-//   const data = readings
-//     .map((r) => ({
-//       t: r.timestamp.slice(11, 16), // HH:MM
-//       temp: r.bme_temp,
-//       hum: r.bme_hum,
-//       press: r.bme_press,
-//       co2: r.scd_co2,
-//     }))
-//     .reverse();
-
-//   const alertMsg =
-//     current.co2 >= 1200
-//       ? "⚠️ CO₂ is high. Improve ventilation."
-//       : "Everything looks good";
-
-//   const humAlert =
-//     current.hum >= 70
-//       ? "⚠️ Humidity is high. Consider using a dehumidifier."
-//       : "All readings are within normal ranges.";
-
-//   return (
-//     <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-//       <Tile
-//         title="Temperature"
-//         value={current.temp.toFixed(1)}
-//         unit="°C"
-//         footer="BME680"
-//       />
-//       <Tile
-//         title="Humidity"
-//         value={current.hum.toFixed(0)}
-//         unit="%"
-//         footer="BME680"
-//       />
-//       <Tile
-//         title="Pressure"
-//         value={current.press.toFixed(1)}
-//         unit="hPa"
-//         footer="BME680"
-//       />
-
-//       <div className={`rounded-2xl border ${current.co2 >= 1200 ? 'border-red-400/40' : current.co2 >= 800 ? 'border-amber-400/40' : 'border-emerald-400/40'} bg-white dark:bg-zinc-900 p-4 shadow-sm`}>
-//         <div className="flex items-center justify-between">
-//           <div className="text-sm opacity-70">CO₂</div>
-//           <StatusBadge co2={current.co2} />
-//         </div>
-//         <div className="mt-2 text-3xl font-semibold">
-//           {current.co2.toFixed(0)} <span className="text-base opacity-70">ppm</span>
-//         </div>
-//         <div className="mt-2 text-xs opacity-70">SCD-40</div>
-//       </div>
-
-//       <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-3">
-//         <div className="flex items-center justify-between">
-//           <div>
-//             <div className="text-sm opacity-70">CO₂ Trend</div>
-//             <div className="text-lg font-semibold">Recent readings</div>
-//           </div>
-//           <div className="text-xs opacity-70">Live</div>
-//         </div>
-
-//         <div className="mt-4 h-56">
-//           <ResponsiveContainer width="100%" height="100%">
-//             <LineChart data={data}>
-//               <CartesianGrid strokeDasharray="3 3" opacity={0.08} />
-//               <XAxis dataKey="t" tick={{ fontSize: 12 }} />
-//               <YAxis tick={{ fontSize: 12 }} />
-//               <Tooltip formatter={(value: any) => `${value} ppm`} />
-//               <defs>
-//                 <linearGradient id="co2Grad" x1="0" x2="0" y1="0" y2="1">
-//                   <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.12} />
-//                   <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
-//                 </linearGradient>
-//               </defs>
-//               <Area type="monotone" dataKey="co2" stroke="#06b6d4" fill="url(#co2Grad)" strokeWidth={2} dot={false} />
-//               <Line type="monotone" dataKey="co2" stroke="#06b6d4" strokeWidth={2} dot={false} />
-//             </LineChart>
-//           </ResponsiveContainer>
-//         </div>
-//       </div>
-
-//       <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-1">
-//         <div className="text-sm opacity-70">Alerts</div>
-//         <div className="mt-2 text-base font-semibold">Status</div>
-//         <div className="mt-3 text-sm opacity-80 leading-relaxed">{alertMsg}</div>
-
-//         <div className="mt-4 text-xs opacity-60">
-//           Thresholds: {humAlert}
-//         </div>
-//       </div>
-
-//       <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
-//         <div className="text-sm opacity-70">Notes</div>
-//         <div className="mt-2 text-sm opacity-80">
-//           Add calibration notes, room info, or sensor placement details here.
-//         </div>
-//       </div>
-
-//       <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
-//         <div className="text-sm opacity-70">Location</div>
-//         <div className="mt-2 text-sm opacity-80">
-//          <UserLocation />
-//         </div>
-//       </div>
-//     </div>
-//   );
-// }
-
 "use client";
 
 import { useEffect, useState } from "react";
+import UserLocation from "@/components/ui/layout/Location";
 
-type SensorData = {
-  temp: number;
-  hum: number;
-  co2: number;
-  press?: number;
+import {
+  LineChart,
+  Line,
+  Area,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  CartesianGrid,
+} from "recharts";
+
+type Reading = {
+  timestamp: string;
+  bme_temp: number;
+  bme_hum: number;
+  bme_press: number;
+  bme_gas: number;
+  scd_co2: number;
+  scd_temp: number;
+  scd_hum: number;
 };
 
-export default function ThermostatPage() {
-  const [sensor, setSensor] = useState<SensorData>({
-    temp: 0,
-    hum: 0,
-    co2: 0,
-  });
+function Tile({
+  title,
+  value,
+  unit,
+  footer,
+}: {
+  title: string;
+  value: string;
+  unit?: string;
+  footer?: string;
+}) {
+  return (
+    <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm hover:shadow-lg transition-shadow duration-200 min-h-[110px]">
+      <div className="text-sm opacity-60">{title}</div>
+      <div className="mt-2 text-4xl sm:text-5xl font-semibold">
+        {value} <span className="text-xs opacity-60">{unit}</span>
+      </div>
+      {footer ? <div className="mt-2 text-xs opacity-70">{footer}</div> : null}
+      <div className="mt-3 h-10">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={[{t:'1', v:1},{t:'2',v:2},{t:'3',v:1.5},{t:'4',v:2.2}] }>
+            <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={2} dot={false} />
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  );
+}
 
-  const [setpoint, setSetpoint] = useState<number>(22);
-  const [loading, setLoading] = useState<boolean>(true);
+function StatusBadge({ co2 }: { co2: number }) {
+  let label = "Good";
+  let cls =
+    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200";
 
-  // Fetch live sensor data
-  useEffect(() => {
-    let cancelled = false;
-
-    async function load() {
-      try {
-        const res = await fetch("/api/thermostat", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = await res.json();
-        if (!cancelled) {
-          setSensor({
-            temp: data.temp ?? 0,
-            hum: data.hum ?? 0,
-            co2: data.co2 ?? 0,
-            press: data.press ?? 0,
-          });
-          setLoading(false);
-        }
-      } catch (e) {
-        console.error("Failed to load thermostat data", e);
-      }
-    }
-
-    load();
-    const interval = setInterval(load, 5000);
-    return () => {
-      cancelled = true;
-      clearInterval(interval);
-    };
-  }, []);
-
-  // Determine HVAC state
-  let state: "heating" | "cooling" | "idle" = "idle";
-  const deadband = 0.3;
-
-  if (sensor.temp < setpoint - deadband) {
-    state = "heating";
-  } else if (sensor.temp > setpoint + deadband) {
-    state = "cooling";
+  if (co2 >= 800 && co2 < 1200) {
+    label = "Moderate";
+    cls =
+      "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200";
+  } else if (co2 >= 1200) {
+    label = "Poor";
+    cls = "bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200";
   }
 
-  const stateLabel =
-    state === "heating" ? "Heating" : state === "cooling" ? "Cooling" : "Idle";
+  return (
+    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium ${cls}`}>
+      <span aria-hidden>
+        {co2 >= 1200 ? "🔥" : co2 >= 800 ? "⚠️" : "✅"}
+      </span>
+      {label}
+    </span>
+  );
+}
 
-  const stateColor =
-    state === "heating"
-      ? "text-red-500"
-      : state === "cooling"
-      ? "text-sky-500"
-      : "text-zinc-500";
+export default function Dashboard() {
+  const [readings, setReadings] = useState<Reading[]>([]);
 
-  const co2Color =
-    sensor.co2 >= 1200
-      ? "text-red-500"
-      : sensor.co2 >= 800
-      ? "text-amber-500"
-      : "text-emerald-500";
+  // Fetch DB data every 5 seconds
+  useEffect(() => {
+  async function load() {
+    try {
+      const res = await fetch("/api/readings");
+      const json = await res.json();
+
+      // Ensure it's always an array
+      if (Array.isArray(json)) {
+        setReadings(json);
+      } else {
+        console.error("API returned non-array:", json);
+        setReadings([]); // fallback
+      }
+    } catch (err) {
+      console.error("Failed to load readings:", err);
+      setReadings([]); // fallback
+    }
+  }
+
+  load();
+  const interval = setInterval(load, 5000);
+  return () => clearInterval(interval);
+}, []);
+
+
+  const latest = readings[0];
+
+  const current = latest
+    ? {
+        temp: latest.bme_temp,
+        hum: latest.scd_hum,
+        press: latest.bme_press,
+        co2: latest.scd_co2,
+      }
+    : {
+        temp: 0,
+        hum: 0,
+        press: 0,
+        co2: 0,
+      };
+
+  const data = readings
+    .map((r) => ({
+      t: r.timestamp.slice(11, 16), // HH:MM
+      temp: r.bme_temp,
+      hum: r.bme_hum,
+      press: r.bme_press,
+      co2: r.scd_co2,
+    }))
+    .reverse();
+
+  const alertMsg =
+    current.co2 >= 1200
+      ? "⚠️ CO₂ is high. Improve ventilation."
+      : "Everything looks good";
+
+  const humAlert =
+    current.hum >= 70
+      ? "⚠️ Humidity is high. Consider using a dehumidifier."
+      : "All readings are within normal ranges.";
 
   return (
-    <div className="min-h-[calc(100vh-4rem)] flex items-center justify-center px-4 py-8">
-      <div className="w-full max-w-xl rounded-3xl border border-zinc-200/60 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm p-6 md:p-8 space-y-6">
+    <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+      <Tile
+        title="Temperature"
+        value={current.temp.toFixed(1)}
+        unit="°C"
+        footer="BME680"
+      />
+      <Tile
+        title="Humidity"
+        value={current.hum.toFixed(0)}
+        unit="%"
+        footer="BME680"
+      />
+      <Tile
+        title="Pressure"
+        value={current.press.toFixed(1)}
+        unit="hPa"
+        footer="BME680"
+      />
+
+      <div className={`rounded-2xl border ${current.co2 >= 1200 ? 'border-red-400/40' : current.co2 >= 800 ? 'border-amber-400/40' : 'border-emerald-400/40'} bg-white dark:bg-zinc-900 p-4 shadow-sm`}>
+        <div className="flex items-center justify-between">
+          <div className="text-sm opacity-70">CO₂</div>
+          <StatusBadge co2={current.co2} />
+        </div>
+        <div className="mt-2 text-3xl font-semibold">
+          {current.co2.toFixed(0)} <span className="text-base opacity-70">ppm</span>
+        </div>
+        <div className="mt-2 text-xs opacity-70">SCD-40</div>
+      </div>
+
+      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-3">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-xl font-semibold tracking-tight">
-              Thermostat
-            </h1>
-            <p className="text-sm text-zinc-500 dark:text-zinc-400">
-              Live control using your BME680 &amp; SCD40 readings.
-            </p>
+            <div className="text-sm opacity-70">CO₂ Trend</div>
+            <div className="text-lg font-semibold">Recent readings</div>
           </div>
-          <div className="text-right">
-            <div className={`text-sm font-medium ${stateColor}`}>
-              {stateLabel}
-            </div>
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              {loading ? "Waiting for sensor..." : "Live from sensors"}
-            </div>
-          </div>
+          <div className="text-xs opacity-70">Live</div>
         </div>
 
-        {/* Main temperature + setpoint */}
-        <div className="flex items-center justify-between gap-6">
-          <div className="flex-1">
-            <div className="text-sm text-zinc-500 dark:text-zinc-400">
-              Current temperature
-            </div>
-            <div className="text-4xl md:text-5xl font-semibold tracking-tight">
-              {sensor.temp.toFixed(1)}°C
-            </div>
-            <div className="mt-2 text-sm text-zinc-500 dark:text-zinc-400">
-              Humidity: {sensor.hum.toFixed(0)}% ·{" "}
-              <span className={co2Color}>CO₂: {sensor.co2} ppm</span>
-            </div>
-          </div>
-
-          <div className="w-px h-20 bg-zinc-200 dark:bg-zinc-800" />
-
-          <div className="flex flex-col items-end gap-2">
-            <div className="text-sm text-zinc-500 dark:text-zinc-400">
-              Setpoint
-            </div>
-            <div className="text-3xl font-semibold tracking-tight">
-              {setpoint.toFixed(1)}°C
-            </div>
-            <div className="flex gap-2 mt-1">
-              <button
-                onClick={() => setSetpoint((s) => Math.max(10, s - 0.5))}
-                className="h-8 w-8 rounded-full border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-lg leading-none hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                –
-              </button>
-              <button
-                onClick={() => setSetpoint((s) => Math.min(30, s + 0.5))}
-                className="h-8 w-8 rounded-full border border-zinc-300 dark:border-zinc-700 flex items-center justify-center text-lg leading-none hover:bg-zinc-100 dark:hover:bg-zinc-800"
-              >
-                +
-              </button>
-            </div>
-          </div>
+        <div className="mt-4 h-56">
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={data}>
+              <CartesianGrid strokeDasharray="3 3" opacity={0.08} />
+              <XAxis dataKey="t" tick={{ fontSize: 12 }} />
+              <YAxis tick={{ fontSize: 12 }} />
+              <Tooltip formatter={(value: any) => `${value} ppm`} />
+              <defs>
+                <linearGradient id="co2Grad" x1="0" x2="0" y1="0" y2="1">
+                  <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.12} />
+                  <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
+                </linearGradient>
+              </defs>
+              <Area type="monotone" dataKey="co2" stroke="#06b6d4" fill="url(#co2Grad)" strokeWidth={2} dot={false} />
+              <Line type="monotone" dataKey="co2" stroke="#06b6d4" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
         </div>
+      </div>
 
-        {/* Slider */}
-        <div className="pt-2">
-          <input
-            type="range"
-            min={15}
-            max={28}
-            step={0.5}
-            value={setpoint}
-            onChange={(e) => setSetpoint(Number(e.target.value))}
-            className="w-full accent-emerald-500"
-          />
-          <div className="flex justify-between text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-            <span>15°C</span>
-            <span>Comfort</span>
-            <span>28°C</span>
-          </div>
+      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-1">
+        <div className="text-sm opacity-70">Alerts</div>
+        <div className="mt-2 text-base font-semibold">Status</div>
+        <div className="mt-3 text-sm opacity-80 leading-relaxed">{alertMsg}</div>
+
+        <div className="mt-4 text-xs opacity-60">
+          Thresholds: {humAlert}
         </div>
+      </div>
 
-        {/* Status summary */}
-        <div className="grid grid-cols-3 gap-3 text-sm">
-          <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-3">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              Delta
-            </div>
-            <div className="text-lg font-medium">
-              {(sensor.temp - setpoint).toFixed(1)}°C
-            </div>
-          </div>
-          <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-3">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              Humidity
-            </div>
-            <div className="text-lg font-medium">
-              {sensor.hum.toFixed(0)}%
-            </div>
-          </div>
-          <div className="rounded-2xl border border-zinc-200 dark:border-zinc-800 p-3">
-            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-              CO₂
-            </div>
-            <div className={`text-lg font-medium ${co2Color}`}>
-              {sensor.co2} ppm
-            </div>
-          </div>
+      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+        <div className="text-sm opacity-70">Notes</div>
+        <div className="mt-2 text-sm opacity-80">
+          Add calibration notes, room info, or sensor placement details here.
         </div>
+      </div>
 
-        {/* Placeholder for future relay control */}
-        <div className="mt-2 text-xs text-zinc-500 dark:text-zinc-400">
-          Logic only for now — when you’re ready, we can wire this state into a
-          Pi relay API.
+      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+        <div className="text-sm opacity-70">Location</div>
+        <div className="mt-2 text-sm opacity-80">
+         <UserLocation />
         </div>
       </div>
     </div>
