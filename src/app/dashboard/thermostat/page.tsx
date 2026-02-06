@@ -295,7 +295,7 @@ export default function ThermostatPage() {
                         )}
                         {sensorReadings[sensorReadings.length - 1].timestamp ? (
                           <span className="ml-2 opacity-60">
-                            (updated {new Date(sensorReadings[sensorReadings.length - 1].timestamp as string).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })})
+                            (updated {new Date(sensorReadings[sensorReadings.length - 1].timestamp as string).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit'})})
                           </span>
                         ) : null}
                       </>
