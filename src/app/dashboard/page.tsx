@@ -82,22 +82,6 @@ export default function Dashboard() {
   const [readings, setReadings] = useState<Reading[]>([]);
 
   // Fetch DB data every 5 seconds
-//  useEffect(() => {
-//    async function load() {
-//      try {
-//        const res = await fetch("/api/readings");
-//        const json = await res.json();
-//        setReadings(json);
-//      } catch (err) {
-//        console.error("Failed to load readings:", err);
-//      }
-//    }
-
-//    load();
-//    const interval = setInterval(load, 5000);
-//    return () => clearInterval(interval);
-//  }, []);
-
   useEffect(() => {
   async function load() {
     try {

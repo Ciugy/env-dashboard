@@ -25,66 +25,80 @@ function getNowMinutes() {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-export default function ThermostatPage() {
-  // "Sensor" reading (replace later with real sensor value)
-  const [currentTemp, setCurrentTemp] = useState(22.3);
+type SensorData = { temp: number; hum: number; co2: number; press?: number; timestamp?: string; };
 
-  // --- Thermostat state ---
+export default function ThermostatPage() {
+  const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.3);
+  const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/readings");
+        const json = await res.json();
+
+        if (Array.isArray(json)) {
+          const mapped = json.map((row) => ({
+            temp: row.bme_temp,
+            hum: row.scd_hum,
+            co2: row.scd_co2,
+            timestamp: row.timestamp,
+          }));
+          setSensorReadings(mapped);
+        } else {
+          setSensorReadings([]);
+        }
+      } catch {
+        setSensorReadings([]);
+      }
+    }
+
+    load();
+    const interval = setInterval(load, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const [mode, setMode] = useState<Mode>("HEAT");
-  const [targetTemp, setTargetTemp] = useState(23.0); // manual setpoint
+  const [targetTemp, setTargetTemp] = useState(23.0);
   const [useSchedule, setUseSchedule] = useState(true);
 
-  // Daily schedule: automatically applied setpoints
   const [schedule, setSchedule] = useState([
-    { at: 6 * 60, temp: 22.0 },   // 6:00
-    { at: 9 * 60, temp: 20.0 },   // 9:00
-    { at: 17 * 60, temp: 22.5 },  // 17:00
-    { at: 22 * 60, temp: 19.5 },  // 22:00
+    { at: 6 * 60, temp: 22.0 },
+    { at: 9 * 60, temp: 20.0 },
+    { at: 17 * 60, temp: 22.5 },
+    { at: 22 * 60, temp: 19.5 },
   ]);
 
-  // Hysteresis (prevents relay/triac chatter)
+  function computeScheduledTemp(schedule: { at: number; temp: number }[]) {
+    if (!schedule.length) return targetTemp;
+
+    const now = new Date();
+    const minutes = now.getHours() * 60 + now.getMinutes();
+
+    const active = schedule
+      .filter((s) => s.at <= minutes)
+      .sort((a, b) => b.at - a.at)[0];
+
+    if (!active) {
+      return schedule[schedule.length - 1].temp;
+    }
+
+    return active.temp;
+  }
+
+  const scheduledTemp = computeScheduledTemp(schedule);
+  const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
+
   const hysteresis = 0.3;
 
-  // Determine scheduled setpoint "for now"
-  const nowMinutes = useMemo(() => getNowMinutes(), []);
-  const scheduledTemp = useMemo(() => {
-  const sorted = [...schedule].sort((a, b) => a.at - b.at);
-
-  // If schedule is empty, fall back to manual setpoint
-  if (sorted.length === 0) return targetTemp;
-
-  let chosen = sorted[0];
-  for (const s of sorted) {
-    if (s.at <= nowMinutes) chosen = s;
-  }
-  return chosen.temp;
-}, [schedule, nowMinutes, targetTemp]);
-
-
-  const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
-  
-  useEffect(() => {
-  if (schedule.length === 0) setUseSchedule(false);
-}, [schedule.length]);
-
-  // Closed-loop decision: should heater be ON?
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
-    if (mode === "AUTO") {
-      // heating with a lamp, so AUTO = behave like HEAT
-      // (Later you could add cooling logic here if needed.)
-    }
-    // Simple hysteresis control:
-    // ON when current < setpoint - hys
-    // OFF when current > setpoint + hys
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
-  // Demo: slowly vary current temp so you can see behavior
   useEffect(() => {
     const t = setInterval(() => {
       setCurrentTemp((v) => {
-        // If heater is ON, temp rises slowly, otherwise it drifts down slightly
         const drift = heatCall ? 0.03 : -0.015;
         return Math.round((v + drift) * 10) / 10;
       });
@@ -92,7 +106,6 @@ export default function ThermostatPage() {
     return () => clearInterval(t);
   }, [heatCall]);
 
-  // Dial interaction
   const minTemp = 10;
   const maxTemp = 30;
 
@@ -105,16 +118,11 @@ export default function ThermostatPage() {
     const x = e.clientX - cx;
     const y = e.clientY - cy;
 
-    // angle: -pi..pi (0 on +x axis). We want top to be 0-ish like a thermostat
-    const angle = Math.atan2(y, x); // -pi..pi
-    // Map angle to 0..1 over a 300° sweep (Nest-like)
-    // We'll use sweep from -210° to +30° (in radians)
+    const angle = Math.atan2(y, x);
     const start = (-210 * Math.PI) / 180;
     const end = (30 * Math.PI) / 180;
 
     let a = angle;
-    // normalize into range by wrapping
-    // Convert to equivalent angle close to our sweep
     while (a < start) a += 2 * Math.PI;
     while (a > start + 2 * Math.PI) a -= 2 * Math.PI;
 
@@ -124,17 +132,16 @@ export default function ThermostatPage() {
     const temp = minTemp + ratio * (maxTemp - minTemp);
     const snapped = roundTo(temp, 0.5);
 
-    // If schedule is on, dragging should switch to manual (typical thermostat behavior)
     setUseSchedule(false);
     setTargetTemp(snapped);
   }
 
-  // Progress ring
   const ratio = (effectiveSetpoint - minTemp) / (maxTemp - minTemp);
   const ring = clamp(ratio, 0, 1);
   const circumference = 2 * Math.PI * 88;
   const dash = circumference * ring;
   const gap = circumference - dash;
+
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
@@ -240,6 +247,55 @@ export default function ThermostatPage() {
                   Current: <span className="tabular-nums">{currentTemp.toFixed(1)}°</span>
                 </div>
 
+                {/* Real sensor reading display */}
+                {sensorReadings.length > 0 ? (() => {
+                const last = sensorReadings[sensorReadings.length - 1];
+                const prev = sensorReadings[sensorReadings.length - 2];
+
+                const hasTemp = typeof last.temp === "number";
+
+                return (
+                  <div className="mt-2 text-xs text-center opacity-80">
+                    <span className="font-medium">Sensor reading:</span>{" "}
+                    {hasTemp ? (
+                      <>
+                        {last.temp.toFixed(1)}°C
+
+                        {/* Trend arrow */}
+                        {prev && typeof prev.temp === "number" && (
+                          <span className="ml-2">
+                            {last.temp > prev.temp ? (
+                              <span className="text-green-500" title="Rising">▲</span>
+                            ) : last.temp < prev.temp ? (
+                              <span className="text-red-500" title="Falling">▼</span>
+                            ) : (
+                              <span className="opacity-40" title="Stable">▬</span>
+                            )}
+                          </span>
+                        )}
+
+                        {/* Timestamp */}
+                        {last.timestamp && (
+                          <span className="ml-2 opacity-60">
+                            (updated{" "}
+                            {new Date(last.timestamp).toLocaleTimeString([], {
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                            )
+                          </span>
+                        )}
+                      </>
+                    ) : (
+                      <span className="text-red-400 ml-2">No temp data</span>
+                    )}
+                  </div>
+              );
+            })() : (
+              <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
+            )}
+
+
                 <div className="mt-4 flex items-center gap-3">
                   <button
                   className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
@@ -298,6 +354,7 @@ export default function ThermostatPage() {
             </div>
           </div>
         </div>
+
 
         {/* Schedule */}
         <div className="bg-zinc-950/40 rounded-2xl border border-zinc-800/60 p-6">
