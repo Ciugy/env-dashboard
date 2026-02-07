@@ -1,6 +1,6 @@
 import time
 import requests
-from pyfirmata import Arduino
+from pyfirmata2 import Arduino
 
 API_URL = "http://localhost:3000/api/control"
 BOARD_PORT = "/dev/ttyACM0"
