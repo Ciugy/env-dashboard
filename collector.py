@@ -61,6 +61,26 @@ def send_actuator_commands():
         state = res.json()
     except Exception:
         return
+    
+    # --- THERMOSTAT LOGIC ---
+    mode = state.get("mode")
+    setpoint = state.get("setpoint")
+    useSchedule = state.get("useSchedule")
+    schedule = state.get("schedule", [])
+
+    # Read latest temperature from DB
+    cursor.execute("SELECT bme_temp FROM sensor_data ORDER BY id DESC LIMIT 1")
+    row = cursor.fetchone()
+    current_temp = row[0] if row else None
+
+    if current_temp is not None:
+        hysteresis = 0.3
+
+        if mode == "HEAT":
+            if current_temp < setpoint - hysteresis:
+                ser.write(b'H')   # heater ON
+            elif current_temp > setpoint + hysteresis:
+                ser.write(b'h')   # heater OFF
 
     # Heater
     if state.get("heater") is True:
