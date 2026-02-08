@@ -96,8 +96,15 @@ export default function ThermostatPage() {
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
-  useEffect(() => {
+useEffect(() => {
   async function send() {
+    console.log("Sending control update:", {
+      mode,
+      setpoint: targetTemp,
+      useSchedule,
+      schedule,
+    });
+
     await fetch("/api/control", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -112,6 +119,7 @@ export default function ThermostatPage() {
 
   send();
 }, [mode, targetTemp, useSchedule, schedule]);
+
 
 
   useEffect(() => {
