@@ -89,20 +89,20 @@ def send_actuator_commands():
             ser.write(b'h')
 
     # MANUAL OVERRIDES 
-    if state.get("heater") is True:
-        ser.write(b'H')
-    elif state.get("heater") is False:
-        ser.write(b'h')
+    # if state.get("heater") is True:
+    #     ser.write(b'H')
+    # elif state.get("heater") is False:
+    #     ser.write(b'h')
 
-    if state.get("fan") is True:
-        ser.write(b'F')
-    elif state.get("fan") is False:
-        ser.write(b'f')
+    # if state.get("fan") is True:
+    #     ser.write(b'F')
+    # elif state.get("fan") is False:
+    #     ser.write(b'f')
 
-    if state.get("humidifier") is True:
-        ser.write(b'U')
-    elif state.get("humidifier") is False:
-        ser.write(b'u')
+    # if state.get("humidifier") is True:
+    #     ser.write(b'U')
+    # elif state.get("humidifier") is False:
+    #     ser.write(b'u')
 
 
 print("Listening for sensor data...")
