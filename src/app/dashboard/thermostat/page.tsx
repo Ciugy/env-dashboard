@@ -97,6 +97,24 @@ export default function ThermostatPage() {
   }, [mode, currentTemp, effectiveSetpoint]);
 
   useEffect(() => {
+  async function send() {
+    await fetch("/api/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        mode,
+        setpoint: targetTemp,
+        useSchedule,
+        schedule,
+      }),
+    });
+  }
+
+  send();
+}, [mode, targetTemp, useSchedule, schedule]);
+
+
+  useEffect(() => {
     const t = setInterval(() => {
       setCurrentTemp((v) => {
         const drift = heatCall ? 0.03 : -0.015;
