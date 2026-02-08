@@ -59,7 +59,7 @@ def send_actuator_commands():
     try:
         res = requests.get(CONTROL_URL, timeout=1)
         raw = res.json()
-        state = raw.get("command", {})
+        state = raw
         print("RAW:", raw)
     except Exception:
         return
