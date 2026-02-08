@@ -60,6 +60,7 @@ def send_actuator_commands():
         res = requests.get(CONTROL_URL, timeout=1)
         raw = res.json()
         state = raw.get("command", {})
+        print("RAW:", raw)
     except Exception:
         return
     
@@ -139,9 +140,11 @@ while True:
 
             print("Saved:", ts, data)
 
+
     # Poll actuator state every 100 ms 
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()
 
     time.sleep(SENSOR_INTERVAL)
+    
