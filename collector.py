@@ -58,11 +58,12 @@ def parse_line(line: str):
 def send_actuator_commands():
     try:
         res = requests.get(CONTROL_URL, timeout=1)
-        state = res.json()
+        raw = res.json()
+        state = raw.get("command", {})
     except Exception:
         return
     
-    # --- THERMOSTAT LOGIC ---
+    # THERMOSTAT LOGIC
     mode = state.get("mode")
     setpoint = state.get("setpoint")
     useSchedule = state.get("useSchedule")
@@ -76,29 +77,32 @@ def send_actuator_commands():
     if current_temp is not None:
         hysteresis = 0.3
 
-        if mode == "HEAT":
-            if current_temp < setpoint - hysteresis:
-                ser.write(b'H')   # heater ON
-            elif current_temp > setpoint + hysteresis:
-                ser.write(b'h')   # heater OFF
+    print("TEMP:", current_temp, "SETPOINT:", setpoint, "MODE:", mode)
 
-    # Heater
+    if mode == "HEAT":
+        if current_temp < setpoint - hysteresis:
+            print("→ Sending H (heater ON)")
+            ser.write(b'H')
+        elif current_temp > setpoint + hysteresis:
+            print("→ Sending h (heater OFF)")
+            ser.write(b'h')
+
+    # MANUAL OVERRIDES 
     if state.get("heater") is True:
         ser.write(b'H')
     elif state.get("heater") is False:
         ser.write(b'h')
 
-    # Fan
     if state.get("fan") is True:
         ser.write(b'F')
     elif state.get("fan") is False:
         ser.write(b'f')
 
-    # Humidifier
     if state.get("humidifier") is True:
         ser.write(b'U')
     elif state.get("humidifier") is False:
         ser.write(b'u')
+
 
 print("Listening for sensor data...")
 
