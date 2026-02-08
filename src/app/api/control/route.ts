@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 let lastCommand: any = {
   led: false,
   heater: false,
+  fan: false,
+  humidifier: false,
 };
 
 export async function POST(req: Request) {
@@ -19,6 +21,14 @@ export async function POST(req: Request) {
 
     if ("heater" in body) {
       lastCommand.heater = !!body.heater;
+    }
+
+    if ("fan" in body) {
+      lastCommand.fan = !!body.fan;
+    }
+
+    if ("humidifier" in body) {
+      lastCommand.humidifier = !!body.humidifier;
     }
 
     return NextResponse.json({

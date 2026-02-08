@@ -88,7 +88,6 @@ export default function Dashboard() {
       const res = await fetch("/api/readings");
       const json = await res.json();
 
-      // Ensure it's always an array
       if (Array.isArray(json)) {
         setReadings(json);
       } else {

@@ -1,13 +1,22 @@
 import sqlite3
 import serial
-import json
 import time
+import json
 from datetime import datetime
-import threading
-import websocket
+import requests
 
-# --- DB setup ---
-conn = sqlite3.connect("./src/app/api/data/sensor_data.db", check_same_thread=False)
+
+SERIAL_PORT = "/dev/ttyACM0"
+BAUD_RATE = 115200
+
+CONTROL_URL = "http://localhost:3000/api/control"
+DB_PATH = "./src/app/api/data/sensor_data.db"
+
+POLL_INTERVAL = 0.10   # 100 ms for actuator polling
+SENSOR_INTERVAL = 0.05 # 50 ms for serial read loop
+
+# DATABASE SETUP
+conn = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -23,59 +32,14 @@ CREATE TABLE IF NOT EXISTS sensor_data (
 """)
 conn.commit()
 
-# Serial setup
-ser = serial.Serial("/dev/ttyACM0", 115200, timeout=2)
+# SERIAL SETUP
+ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
-# WebSocket setup
-WS_URL = "ws://localhost:3000/api/ws"
-ws = None
 
-def ws_on_message(ws, message):
-    try:
-        data = json.loads(message)
-    except:
-        return
-
-    if data.get("type") == "command":
-        # Heater
-        if "heater" in data:
-            ser.write(b'H' if data["heater"] else b'h')
-
-        # Fan
-        if "fan" in data:
-            ser.write(b'F' if data["fan"] else b'f')
-
-        # Humidifier
-        if "humidifier" in data:
-            ser.write(b'U' if data["humidifier"] else b'u')
-
-def ws_on_open(ws):
-    print("WebSocket connected")
-
-def ws_on_close(ws, code, msg):
-    print("WebSocket closed", code, msg)
-
-def ws_thread():
-    global ws
-    while True:
-        try:
-            ws = websocket.WebSocketApp(
-                WS_URL,
-                on_message=ws_on_message,
-                on_open=ws_on_open,
-                on_close=ws_on_close,
-            )
-            ws.run_forever()
-        except Exception as e:
-            print("WS error:", e)
-            time.sleep(2)
-
-threading.Thread(target=ws_thread, daemon=True).start()
-
-# Main loop: read serial, save to DB, push to UI
-def parse_line(line):
+# PARSE CSV FROM ARDUINO
+def parse_line(line: str):
     parts = [p.strip() for p in line.split(",")]
     data = {}
     for p in parts:
@@ -90,44 +54,70 @@ def parse_line(line):
             data[key] = value
     return data
 
+# SEND ACTUATOR COMMANDS
+def send_actuator_commands():
+    try:
+        res = requests.get(CONTROL_URL, timeout=1)
+        state = res.json()
+    except Exception:
+        return
+
+    # Heater
+    if state.get("heater") is True:
+        ser.write(b'H')
+    elif state.get("heater") is False:
+        ser.write(b'h')
+
+    # Fan
+    if state.get("fan") is True:
+        ser.write(b'F')
+    elif state.get("fan") is False:
+        ser.write(b'f')
+
+    # Humidifier
+    if state.get("humidifier") is True:
+        ser.write(b'U')
+    elif state.get("humidifier") is False:
+        ser.write(b'u')
+
 print("Listening for sensor data...")
 
+last_actuator_poll = time.time()
+
 while True:
-    line = ser.readline().decode(errors="ignore").strip()
-    if not line:
+    #Read sensor data 
+    try:
+        line = ser.readline().decode(errors="ignore").strip()
+    except Exception as e:
+        print("Serial error:", e)
+        time.sleep(1)
         continue
 
-    data = parse_line(line)
-    if not data:
-        continue
+    if line:
+        data = parse_line(line)
+        if data:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            cursor.execute("""
+                INSERT INTO sensor_data (
+                    timestamp, bme_temp, bme_press, bme_gas,
+                    scd_co2, scd_hum
+                ) VALUES (?, ?, ?, ?, ?, ?)
+            """, (
+                ts,
+                data.get("bme_temp"),
+                data.get("bme_press"),
+                data.get("bme_gas"),
+                data.get("scd_co2"),
+                data.get("scd_hum")
+            ))
+            conn.commit()
 
-    cursor.execute("""
-        INSERT INTO sensor_data (
-            timestamp, bme_temp, bme_press, bme_gas,
-            scd_co2, scd_hum
-        ) VALUES (?, ?, ?, ?, ?, ?)
-    """, (
-        ts,
-        data.get("bme_temp"),
-        data.get("bme_press"),
-        data.get("bme_gas"),
-        data.get("scd_co2"),
-        data.get("scd_hum")
-    ))
-    conn.commit()
+            print("Saved:", ts, data)
 
-    # Push live sensor data to UI
-    if ws and ws.sock and ws.sock.connected:
-        ws.send(json.dumps({
-            "type": "sensor",
-            "timestamp": ts,
-            "bme_temp": data.get("bme_temp"),
-            "bme_press": data.get("bme_press"),
-            "bme_gas": data.get("bme_gas"),
-            "scd_co2": data.get("scd_co2"),
-            "scd_hum": data.get("scd_hum"),
-        }))
+    # Poll actuator state every 100 ms 
+    if time.time() - last_actuator_poll >= POLL_INTERVAL:
+        send_actuator_commands()
+        last_actuator_poll = time.time()
 
-    time.sleep(0.05)
+    time.sleep(SENSOR_INTERVAL)
