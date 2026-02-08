@@ -86,14 +86,14 @@ def send_actuator_commands():
         ser.write(b'h')
         return
 
-    # MANUAL OVERRIDE
-    if "heater" in state:
-        if state["heater"] is True:
-            ser.write(b'H')
-            return
-        elif state["heater"] is False:
-            ser.write(b'h')
-            return
+    # # MANUAL OVERRIDE
+    # if "heater" in state:
+    #     if state["heater"] is True:
+    #         ser.write(b'H')
+    #         return
+    #     elif state["heater"] is False:
+    #         ser.write(b'h')
+    #         return
 
     # THERMOSTAT LOGIC
     if mode == "HEAT":
