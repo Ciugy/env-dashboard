@@ -103,6 +103,14 @@ def send_actuator_commands():
         elif current_temp > setpoint + hysteresis:
             print("→ Sending h (heater OFF)")
             ser.write(b'h')
+            
+    # if mode == "COOL":
+    #     if current_temp > setpoint + hysteresis:
+    #         print("→ Sending H (Cooler ON)")
+    #         ser.write(b'F')
+    #     elif current_temp < setpoint - hysteresis:
+    #         print("→ Sending h (Cooler OFF)")
+    #         ser.write(b'f')
 
 
 
