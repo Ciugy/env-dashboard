@@ -20,17 +20,38 @@ function minutesToTimeLabel(m: number) {
   return `${h12}:${mm.toString().padStart(2, "0")} ${ampm}`;
 }
 
-function getNowMinutes() {
-  const d = new Date();
-  return d.getHours() * 60 + d.getMinutes();
-}
-
-type SensorData = { temp: number; hum: number; co2: number; press?: number; timestamp?: string; };
+type SensorData = {
+  temp: number;
+  hum: number;
+  co2: number;
+  timestamp?: string;
+};
 
 export default function ThermostatPage() {
-  const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.3);
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
+  const [currentTemp, setCurrentTemp] = useState(22.3);
 
+  // CONTROL STATE
+  const [mode, setMode] = useState<Mode>("HEAT");
+  const [targetTemp, setTargetTemp] = useState(23.0);
+  const [useSchedule, setUseSchedule] = useState(true);
+
+  const [overrideMode, setOverrideMode] = useState(false);
+  const [overrideSetpoint, setOverrideSetpoint] = useState<number | null>(null);
+
+  // NEW: Fan + Humidifier + Heater status
+  const [fan, setFan] = useState(0); // 0–100%
+  const [humidifier, setHumidifier] = useState(false);
+  const [heaterStatus, setHeaterStatus] = useState(false);
+
+  const [schedule, setSchedule] = useState([
+    { at: 6 * 60, temp: 22.0 },
+    { at: 9 * 60, temp: 20.0 },
+    { at: 17 * 60, temp: 22.5 },
+    { at: 22 * 60, temp: 19.5 },
+  ]);
+
+  // LOAD SENSOR DATA
   useEffect(() => {
     async function load() {
       try {
@@ -58,16 +79,33 @@ export default function ThermostatPage() {
     return () => clearInterval(interval);
   }, []);
 
-  const [mode, setMode] = useState<Mode>("HEAT");
-  const [targetTemp, setTargetTemp] = useState(23.0);
-  const [useSchedule, setUseSchedule] = useState(true);
+  // LOAD CONTROL STATE FROM BACKEND
+  useEffect(() => {
+    async function loadControl() {
+      try {
+        const res = await fetch("/api/control");
+        const data = await res.json();
 
-  const [schedule, setSchedule] = useState([
-    { at: 6 * 60, temp: 22.0 },
-    { at: 9 * 60, temp: 20.0 },
-    { at: 17 * 60, temp: 22.5 },
-    { at: 22 * 60, temp: 19.5 },
-  ]);
+        setMode(data.mode);
+        setTargetTemp(data.setpoint);
+        setUseSchedule(data.useSchedule);
+        setSchedule(data.schedule);
+        setOverrideMode(data.overrideMode);
+        setOverrideSetpoint(data.overrideSetpoint);
+
+        setFan(data.fan ?? 0);
+        setHumidifier(data.humidifier ?? false);
+        setHeaterStatus(data.heater ?? false);
+      } catch (err) {
+        console.error("Failed to load control state", err);
+      }
+    }
+
+    loadControl();
+    const interval = setInterval(loadControl, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
 
   function computeScheduledTemp(schedule: { at: number; temp: number }[]) {
     if (!schedule.length) return targetTemp;
@@ -96,42 +134,48 @@ export default function ThermostatPage() {
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
-useEffect(() => {
-  async function send() {
-    console.log("Sending control update:", {
-      mode,
-      setpoint: targetTemp,
-      useSchedule,
-      schedule,
-    });
 
-    await fetch("/api/control", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+  // SEND CONTROL STATE TO BACKEND
+  useEffect(() => {
+    async function send() {
+      const payload = {
         mode,
         setpoint: targetTemp,
         useSchedule,
         schedule,
-      }),
-    });
-  }
-
-  send();
-}, [mode, targetTemp, useSchedule, schedule]);
-
+        overrideMode,
+        overrideSetpoint,
+        fan: coolCall ? 100 : fan,   // auto cooling
+        humidifier
+      };
 
 
+      await fetch("/api/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+    }
+
+    send();
+  }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, fan, humidifier]);
+
+  // SIMULATED TEMPERATURE DRIFT
   useEffect(() => {
     const t = setInterval(() => {
       setCurrentTemp((v) => {
-        const drift = heatCall ? 0.03 : -0.015;
+        const drift =
+            heatCall ? +0.03 :
+            coolCall ? -0.03 :
+            0;
         return Math.round((v + drift) * 10) / 10;
       });
     }, 400);
     return () => clearInterval(t);
   }, [heatCall]);
 
+
+  // DIAL LOGIC
   const minTemp = 10;
   const maxTemp = 30;
 
@@ -168,14 +212,26 @@ useEffect(() => {
   const dash = circumference * ring;
   const gap = circumference - dash;
 
+  const coolCall = useMemo(() => {
+  if (mode === "OFF") return false;
+  return currentTemp > effectiveSetpoint + hysteresis;
+}, [mode, currentTemp, effectiveSetpoint]);
+
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Thermostat</h1>
+
+          {overrideMode && (
+            <div className="mt-2 text-sm text-amber-400">
+              Physical Override Active — Setpoint {overrideSetpoint}°C
+            </div>
+          )}
+
           <p className="mt-1 text-sm opacity-70">
-            Schedule → Setpoint → Compare to sensor → Heater (TRIAC lamp) + optional fan
+            Schedule → Setpoint → Compare to sensor → Heater + Fan + Humidifier
           </p>
         </div>
 
@@ -208,7 +264,7 @@ useEffect(() => {
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-2">
-        {/* Dial */}
+        {/* LEFT SIDE: DIAL + STATUS */}
         <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/40 p-6">
           <div className="flex items-center justify-between">
             <div className="text-sm opacity-70">
@@ -222,6 +278,7 @@ useEffect(() => {
             </button>
           </div>
 
+          {/* DIAL */}
           <div className="mt-6 flex items-center justify-center">
             <div
               className="relative h-[240px] w-[240px] select-none"
@@ -230,13 +287,9 @@ useEffect(() => {
                 setDragging(true);
                 handleDialPointer(e);
               }}
-              onPointerMove={(e) => {
-                if (!dragging) return;
-                handleDialPointer(e);
-              }}
+              onPointerMove={(e) => dragging && handleDialPointer(e)}
               onPointerUp={() => setDragging(false)}
             >
-              {/* Outer ring */}
               <svg className="absolute inset-0" viewBox="0 0 200 200">
                 <circle
                   cx="100"
@@ -257,132 +310,188 @@ useEffect(() => {
                   strokeLinecap="round"
                   strokeDasharray={`${dash} ${gap}`}
                   transform="rotate(-210 100 100)"
-                  className={heatCall && mode !== "OFF" ? "text-orange-400" : "text-sky-400"}
+                  className={
+                      mode === "OFF"
+                        ? "text-zinc-700"
+                        : heatCall
+                        ? "text-orange-400"
+                        : coolCall
+                        ? "text-blue-400"
+                        : "text-sky-400"
+                      }
                 />
               </svg>
-
-              {/* Center */}
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="text-xs uppercase tracking-widest opacity-60">
-                  {mode === "OFF" ? "System Off" : heatCall ? "Heating" : "Holding"}
+                  {mode === "OFF"
+                    ? "System Off"
+                    : heatCall
+                    ? "Heating"
+                    : coolCall
+                    ? "Cooling"
+                    : "Holding"}
                 </div>
                 <div className="mt-2 text-5xl font-semibold tabular-nums">
                   {effectiveSetpoint.toFixed(1)}°
                 </div>
-                <div className="mt-2 text-sm opacity-70">
-                  Current: <span className="tabular-nums">{currentTemp.toFixed(1)}°</span>
-                </div>
 
-                {/* Real sensor reading display */}
+                {/* SENSOR READING */}
                 {sensorReadings.length > 0 ? (() => {
-                const last = sensorReadings[sensorReadings.length - 1];
-                const prev = sensorReadings[sensorReadings.length - 2];
+                  const last = sensorReadings[sensorReadings.length - 1];
+                  const prev = sensorReadings[sensorReadings.length - 2];
 
-                const hasTemp = typeof last.temp === "number";
+                  return (
+                    <div className="mt-2 text-xs text-center opacity-80">
+                      <span className="font-medium">Sensor reading:</span>{" "}
+                      {last.temp.toFixed(1)}°C
+                      {prev && (
+                        <span className="ml-2">
+                          {last.temp > prev.temp ? (
+                            <span className="text-green-500">▲</span>
+                          ) : last.temp < prev.temp ? (
+                            <span className="text-red-500">▼</span>
+                          ) : (
+                            <span className="opacity-40">▬</span>
+                          )}
+                        </span>
+                      )}
 
-                return (
-                  <div className="mt-2 text-xs text-center opacity-80">
-                    <span className="font-medium">Sensor reading:</span>{" "}
-                    {hasTemp ? (
-                      <>
-                        {last.temp.toFixed(1)}°C
+                      {last.timestamp && (
+                        <span className="ml-2 opacity-60">
+                          (updated{" "}
+                          {new Date(last.timestamp).toLocaleTimeString([], {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                          )
+                        </span>
+                      )}
+                    </div>
+                  );
+                })() : (
+                  <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
+                )}
 
-                        {/* Trend arrow */}
-                        {prev && typeof prev.temp === "number" && (
-                          <span className="ml-2">
-                            {last.temp > prev.temp ? (
-                              <span className="text-green-500" title="Rising">▲</span>
-                            ) : last.temp < prev.temp ? (
-                              <span className="text-red-500" title="Falling">▼</span>
-                            ) : (
-                              <span className="opacity-40" title="Stable">▬</span>
-                            )}
-                          </span>
-                        )}
-
-                        {/* Timestamp */}
-                        {last.timestamp && (
-                          <span className="ml-2 opacity-60">
-                            (updated{" "}
-                            {new Date(last.timestamp).toLocaleTimeString([], {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                            )
-                          </span>
-                        )}
-                      </>
-                    ) : (
-                      <span className="text-red-400 ml-2">No temp data</span>
-                    )}
-                  </div>
-              );
-            })() : (
-              <div className="mt-2 text-xs text-center opacity-60">No sensor data</div>
-            )}
-
-
-                <div className="mt-4 flex items-center gap-3">
+                {/* +/- BUTTONS */}
+                <div
+                  className="mt-4 flex items-center gap-3"
+                  onPointerDown={(e) => e.stopPropagation()}
+                  onPointerMove={(e) => e.stopPropagation()}
+                  onPointerUp={(e) => e.stopPropagation()}
+                >
                   <button
-                  className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setUseSchedule(false);
-                    setTargetTemp((t) => clamp(t - 0.5, minTemp, maxTemp));
-                  }}
-                >
-                  −
-                </button>
+                    className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
+                    onClick={() => {
+                      setUseSchedule(false);
+                      setTargetTemp((t) => clamp(t - 0.5, minTemp, maxTemp));
+                    }}
+                  >
+                    −
+                  </button>
 
-                <button
-                  className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
-                  onPointerDown={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                  }}
-                  onClick={(e) => {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    setUseSchedule(false);
-                    setTargetTemp((t) => clamp(t + 0.5, minTemp, maxTemp));
-                  }}
-                >
-                  +
-                </button>
-
+                  <button
+                    className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
+                    onClick={() => {
+                      setUseSchedule(false);
+                      setTargetTemp((t) => clamp(t + 0.5, minTemp, maxTemp));
+                    }}
+                  >
+                    +
+                  </button>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Output status */}
+          {/* OUTPUT STATUS */}
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-              <div className="text-xs opacity-60">Heater Output</div>
-              <div className="mt-1 text-sm font-medium">
-                {mode === "OFF" ? "OFF" : heatCall ? "ON (TRIAC)" : "OFF"}
+              {/* Heater */}
+              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+                <div className="text-xs opacity-60">Heater Output</div>
+                <div className="mt-1 text-sm font-medium">
+                  {heaterStatus ? "ON (ESP32)" : "OFF"}
+                </div>
+              </div>
+
+              {/* Cooling */}
+              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+                <div className="text-xs opacity-60">Cooling Output</div>
+                <div className="mt-1 text-sm font-medium">
+                  {coolCall ? "ON (Fan)" : "OFF"}
+                </div>
+              </div>
+
+              {/* Setpoint Source */}
+              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+                <div className="text-xs opacity-60">Setpoint Source</div>
+                <div className="mt-1 text-sm font-medium">
+                  {useSchedule ? "Schedule" : "Manual"}
+                </div>
+              </div>
+          </div>
+
+          {/* FAN + HUMIDIFIER CONTROLS */}
+          <div className="mt-6 grid gap-3 sm:grid-cols-2">
+            {/* FAN */}
+            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+              <div className="text-sm opacity-60">Cooling Fan (PWM)</div>
+              <input
+                type="range"
+                min={0}
+                max={100}
+                value={fan}
+                onChange={(e) => setFan(Number(e.target.value))}
+                className="w-full mt-3"
+              />
+              <div className="mt-2 text-sm opacity-80">
+                Speed: <span className="font-medium">{fan}%</span>
               </div>
             </div>
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-              <div className="text-xs opacity-60">Setpoint Source</div>
-              <div className="mt-1 text-sm font-medium">
-                {useSchedule ? "Schedule" : "Manual"}
-              </div>
+
+            {/* HUMIDIFIER */}
+            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+              <div className="text-sm opacity-60">Humidifier</div>
+              <button
+                onClick={() => setHumidifier((v) => !v)}
+                className={`mt-3 px-4 py-2 rounded-lg text-sm ${
+                  humidifier
+                    ? "bg-emerald-600 text-white"
+                    : "bg-zinc-800 text-zinc-300"
+                }`}
+              >
+                {humidifier ? "ON" : "OFF"}
+              </button>
             </div>
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-              <div className="text-xs opacity-60">Hysteresis</div>
-              <div className="mt-1 text-sm font-medium tabular-nums">±{hysteresis}°C</div>
+          </div>
+
+          {/* ACTUATOR STATUS */}
+          <div className="mt-6 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
+            <div className="text-sm opacity-60">Actuator Status (ESP32 Modules)</div>
+
+            <div className="mt-3 grid gap-3 sm:grid-cols-3">
+              <div>
+                <div className="text-xs opacity-60">Heater</div>
+                <div className="mt-1 text-sm font-medium">
+                  {heaterStatus ? "ON" : "OFF"}
+                </div>
+              </div>
+
+              <div>
+                <div className="text-xs opacity-60">Cooling Fan</div>
+                <div className="mt-1 text-sm font-medium">{fan}%</div>
+              </div>
+
+              <div>
+                <div className="text-xs opacity-60">Humidifier</div>
+                <div className="mt-1 text-sm font-medium">
+                  {humidifier ? "ON" : "OFF"}
+                </div>
+              </div>
             </div>
           </div>
         </div>
 
-
-        {/* Schedule */}
+        {/*RIGHT SIDE: SCHEDULE*/}
         <div className="bg-zinc-950/40 rounded-2xl border border-zinc-800/60 p-6">
           <div className="flex items-center justify-between">
             <div>
@@ -411,8 +520,10 @@ useEffect(() => {
                   className="grid gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3 md:grid-cols-[96px_1fr_72px_96px_auto]"
                 >
                   <div className="flex items-center gap-3">
-                    <div className="text-sm tabular-nums md:self-center">{minutesToTimeLabel(item.at)}</div>
-                      <div className="flex items-center gap-3 md:self-center">
+                    <div className="text-sm tabular-nums md:self-center">
+                      {minutesToTimeLabel(item.at)}
+                    </div>
+                    <div className="flex items-center gap-3 md:self-center">
                       <input
                         type="range"
                         min={minTemp}
@@ -430,8 +541,11 @@ useEffect(() => {
                         className="w-full"
                       />
                     </div>
-                    <div className="text-sm tabular-nums md:self-center">{item.temp.toFixed(1)}°</div>
+                    <div className="text-sm tabular-nums md:self-center">
+                      {item.temp.toFixed(1)}°
+                    </div>
                   </div>
+
                   <div className="flex items-center gap-2">
                     <input
                       type="time"
@@ -461,9 +575,11 @@ useEffect(() => {
           <div className="mt-4 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3 text-sm">
             <div className="opacity-70">Right now (based on time):</div>
             <div className="mt-1">
-              Scheduled setpoint: <span className="font-medium tabular-nums">{scheduledTemp.toFixed(1)}°C</span>
+              Scheduled setpoint:{" "}
+              <span className="font-medium tabular-nums">{scheduledTemp.toFixed(1)}°C</span>
               {" · "}
-              Effective setpoint: <span className="font-medium tabular-nums">{effectiveSetpoint.toFixed(1)}°C</span>
+              Effective setpoint:{" "}
+              <span className="font-medium tabular-nums">{effectiveSetpoint.toFixed(1)}°C</span>
             </div>
           </div>
         </div>

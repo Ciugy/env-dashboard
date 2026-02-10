@@ -5,15 +5,14 @@ import json
 from datetime import datetime
 import requests
 
-
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 115200
 
 CONTROL_URL = "http://localhost:3000/api/control"
 DB_PATH = "./src/app/api/data/sensor_data.db"
 
-POLL_INTERVAL = 0.10   # 100 ms for actuator polling
-SENSOR_INTERVAL = 0.05 # 50 ms for serial read loop
+POLL_INTERVAL = 0.10
+SENSOR_INTERVAL = 0.05
 
 # DATABASE SETUP
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -32,13 +31,11 @@ CREATE TABLE IF NOT EXISTS sensor_data (
 """)
 conn.commit()
 
-# SERIAL SETUP
+# SERIAL SETUP (still needed for sensor input)
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
-
-# PARSE CSV FROM ARDUINO
 def parse_line(line: str):
     parts = [p.strip() for p in line.split(",")]
     data = {}
@@ -54,72 +51,77 @@ def parse_line(line: str):
             data[key] = value
     return data
 
-# SEND ACTUATOR COMMANDS
 def send_actuator_commands():
     try:
         res = requests.get(CONTROL_URL, timeout=1)
-        raw = res.json()
-        state = raw
-        print("RAW:", raw)
-    except Exception:
+        state = res.json()
+    except:
         return
-    
-    # THERMOSTAT LOGIC
+
     mode = state.get("mode")
     setpoint = state.get("setpoint")
-    useSchedule = state.get("useSchedule")
-    schedule = state.get("schedule", [])
 
-    # Read latest temperature from DB
-    cursor.execute("SELECT bme_temp FROM sensor_data ORDER BY id DESC LIMIT 1")
+    # Read latest temperature + humidity
+    cursor.execute("SELECT bme_temp, scd_hum FROM sensor_data ORDER BY id DESC LIMIT 1")
     row = cursor.fetchone()
-    current_temp = row[0] if row else None
-
-    if current_temp is not None:
-        hysteresis = 0.3
-
-    print("TEMP:", current_temp, "SETPOINT:", setpoint, "MODE:", mode)
-
-   # OFF MODE
-    if mode == "OFF":
-        print("→ Mode OFF: turning heater OFF")
-        ser.write(b'h')
+    if not row:
         return
 
-    # # MANUAL OVERRIDE
-    # if "heater" in state:
-    #     if state["heater"] is True:
-    #         ser.write(b'H')
-    #         return
-    #     elif state["heater"] is False:
-    #         ser.write(b'h')
-    #         return
+    current_temp, current_hum = row
+    hysteresis = 0.3
 
-    # THERMOSTAT LOGIC
+    # OVERRIDE MODE
+    if state.get("overrideMode") and state.get("overrideSetpoint") is not None:
+        setpoint = state["overrideSetpoint"]
+
+    # Default actuator states
+    heater_on = False
+    fan_pwm = 0
+    humidifier_on = False
+
+    # OFF MODE
+    if mode == "OFF":
+        update_backend(heater=False, fan=0, humidifier=False)
+        return
+
+    # HEAT MODE
     if mode == "HEAT":
-        if current_temp < setpoint - hysteresis: # type: ignore
-            print("→ Sending H (heater ON)")
-            ser.write(b'H')
-        elif current_temp > setpoint + hysteresis: # type: ignore
-            print("→ Sending h (heater OFF)")
-            ser.write(b'h')
-            
-    # if mode == "COOL":
-    #     if current_temp > setpoint + hysteresis:
-    #         print("→ Sending H (Cooler ON)")
-    #         ser.write(b'F')
-    #     elif current_temp < setpoint - hysteresis:
-    #         print("→ Sending h (Cooler OFF)")
-    #         ser.write(b'f')
+        # Heater logic
+        if current_temp < setpoint - hysteresis:
+            heater_on = True
+        elif current_temp > setpoint + hysteresis:
+            heater_on = False
 
+        # Cooling fan logic (PWM)
+        if current_temp > setpoint + 1:
+            diff = current_temp - setpoint
+            fan_pwm = min(int(diff * 50), 255)  # scale: 1°C = 50 PWM
+        else:
+            fan_pwm = 0
 
+        # Humidifier logic (simple ON/OFF)
+        if current_hum < 40:  # threshold example
+            humidifier_on = True
+        elif current_hum > 45:
+            humidifier_on = False
+
+    update_backend(heater=heater_on, fan=fan_pwm, humidifier=humidifier_on)
+
+def update_backend(heater: bool, fan: int, humidifier: bool):
+    try:
+        requests.post(CONTROL_URL, json={
+            "heater": heater,
+            "fan": fan,
+            "humidifier": humidifier
+        }, timeout=1)
+    except:
+        pass
 
 print("Listening for sensor data...")
 
 last_actuator_poll = time.time()
 
 while True:
-    #Read sensor data 
     try:
         line = ser.readline().decode(errors="ignore").strip()
     except Exception as e:
@@ -147,13 +149,8 @@ while True:
             ))
             conn.commit()
 
-            print("Saved:", ts, data)
-
-
-    # Poll actuator state every 100 ms 
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()
 
     time.sleep(SENSOR_INTERVAL)
-    
