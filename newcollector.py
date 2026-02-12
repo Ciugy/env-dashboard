@@ -31,11 +31,49 @@ CREATE TABLE IF NOT EXISTS sensor_data (
 """)
 conn.commit()
 
-# SERIAL SETUP (still needed for sensor input)
+# SERIAL SETUP
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
+
+# HANDLE OVERRIDE COMMANDS FROM ARDUINO
+def handle_override_command(cmd):
+    try:
+        res = requests.get(CONTROL_URL, timeout=1)
+        state = res.json()
+    except:
+        return
+
+    # Initialize override setpoint if missing
+    if state.get("overrideSetpoint") is None:
+        state["overrideSetpoint"] = state.get("setpoint", 22)
+
+    if cmd == "O1":
+        requests.post(CONTROL_URL, json={"overrideMode": True})
+
+    elif cmd == "SP+":
+        new_sp = state["overrideSetpoint"] + 0.5
+        requests.post(CONTROL_URL, json={"overrideSetpoint": new_sp})
+
+    elif cmd == "SP-":
+        new_sp = state["overrideSetpoint"] - 0.5
+        requests.post(CONTROL_URL, json={"overrideSetpoint": new_sp})
+
+    elif cmd == "H":
+        requests.post(CONTROL_URL, json={"heater": True})
+
+    elif cmd == "h":
+        requests.post(CONTROL_URL, json={"heater": False})
+
+    elif cmd == "F":
+        requests.post(CONTROL_URL, json={"fan": 100})
+
+    elif cmd == "f":
+        requests.post(CONTROL_URL, json={"fan": 0})
+
+
+# PARSE SENSOR CSV LINES
 def parse_line(line: str):
     parts = [p.strip() for p in line.split(",")]
     data = {}
@@ -51,6 +89,9 @@ def parse_line(line: str):
             data[key] = value
     return data
 
+
+
+# ACTUATOR LOGIC
 def send_actuator_commands():
     try:
         res = requests.get(CONTROL_URL, timeout=1)
@@ -95,18 +136,20 @@ def send_actuator_commands():
         # Cooling fan logic (PWM)
         if current_temp > setpoint + 1:
             diff = current_temp - setpoint
-            fan_pwm = min(int(diff * 50), 255)  # scale: 1°C = 50 PWM
+            fan_pwm = min(int(diff * 50), 255)
         else:
             fan_pwm = 0
 
-        # Humidifier logic (simple ON/OFF)
-        if current_hum < 40:  # threshold example
+        # Humidifier logic
+        if current_hum < 40:
             humidifier_on = True
         elif current_hum > 45:
             humidifier_on = False
 
     update_backend(heater=heater_on, fan=fan_pwm, humidifier=humidifier_on)
 
+
+# UPDATE BACKEND STATE
 def update_backend(heater: bool, fan: int, humidifier: bool):
     try:
         requests.post(CONTROL_URL, json={
@@ -116,6 +159,7 @@ def update_backend(heater: bool, fan: int, humidifier: bool):
         }, timeout=1)
     except:
         pass
+
 
 print("Listening for sensor data...")
 
@@ -129,6 +173,12 @@ while True:
         time.sleep(1)
         continue
 
+    # 🔥 HANDLE OVERRIDE COMMANDS FIRST
+    if line in ["O1", "O0", "SP+", "SP-", "H", "h", "F", "f"]:
+        handle_override_command(line)
+        continue
+
+    # 🔥 SENSOR CSV LINES
     if line:
         data = parse_line(line)
         if data:
@@ -149,6 +199,7 @@ while True:
             ))
             conn.commit()
 
+    # PERIODIC ACTUATOR LOGIC
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()
