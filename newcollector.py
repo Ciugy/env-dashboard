@@ -173,12 +173,12 @@ while True:
         time.sleep(1)
         continue
 
-    # 🔥 HANDLE OVERRIDE COMMANDS FIRST
+    # HANDLE OVERRIDE COMMANDS FIRST
     if line in ["O1", "O0", "SP+", "SP-", "H", "h", "F", "f"]:
         handle_override_command(line)
         continue
 
-    # 🔥 SENSOR CSV LINES
+    # SENSOR CSV LINES
     if line:
         data = parse_line(line)
         if data:
@@ -198,6 +198,9 @@ while True:
                 data.get("scd_hum")
             ))
             conn.commit()
+            
+            print("Saved:", ts, data)
+
 
     # PERIODIC ACTUATOR LOGIC
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
