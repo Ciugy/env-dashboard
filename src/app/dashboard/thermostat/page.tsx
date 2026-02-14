@@ -65,7 +65,13 @@ export default function ThermostatPage() {
             co2: row.scd_co2,
             timestamp: row.timestamp,
           }));
+
           setSensorReadings(mapped);
+
+          // ⭐ NEW: update UI temperature from newest reading
+          if (mapped.length > 0) {
+            setCurrentTemp(mapped[0].temp);
+          }
         } else {
           setSensorReadings([]);
         }
@@ -74,10 +80,11 @@ export default function ThermostatPage() {
       }
     }
 
-    load();
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
-  }, []);
+  load();
+  const interval = setInterval(load, 5000);
+  return () => clearInterval(interval);
+}, []);
+
 
   // LOAD CONTROL STATE FROM BACKEND
   useEffect(() => {
@@ -159,21 +166,6 @@ export default function ThermostatPage() {
 
     send();
   }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, fan, humidifier]);
-
-  // SIMULATED TEMPERATURE DRIFT
-  useEffect(() => {
-    const t = setInterval(() => {
-      setCurrentTemp((v) => {
-        const drift =
-            heatCall ? +0.03 :
-            coolCall ? -0.03 :
-            0;
-        return Math.round((v + drift) * 10) / 10;
-      });
-    }, 400);
-    return () => clearInterval(t);
-  }, [heatCall]);
-
 
   // DIAL LOGIC
   const minTemp = 10;
