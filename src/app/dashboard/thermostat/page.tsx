@@ -39,7 +39,7 @@ export default function ThermostatPage() {
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideSetpoint, setOverrideSetpoint] = useState<number | null>(null);
 
-  // NEW: Fan + Humidifier + Heater status
+  // Fan + Humidifier + Heater status
   const [fan, setFan] = useState(0); // 0–100%
   const [humidifier, setHumidifier] = useState(false);
   const [heaterStatus, setHeaterStatus] = useState(false);
@@ -68,7 +68,7 @@ export default function ThermostatPage() {
 
           setSensorReadings(mapped);
 
-          // ⭐ NEW: update UI temperature from newest reading
+          // update UI temperature from newest reading
           if (mapped.length > 0) {
             setCurrentTemp(mapped[0].temp);
           }

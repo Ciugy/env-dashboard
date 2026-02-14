@@ -6,7 +6,7 @@ import sqlite3 from "sqlite3";
    try {
    
      const db = await open({
-       filename: "/home/alexpi/Desktop/app/env-dashboard/src/app/api/data/sensor_data.db",
+       filename: "/home/alexpi/Desktop/appv2/env-dashboard/src/app/api/data/sensor_data.db",
        driver: sqlite3.Database,
      });
 
