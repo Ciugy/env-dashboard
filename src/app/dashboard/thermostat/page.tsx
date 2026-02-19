@@ -39,16 +39,13 @@ export default function ThermostatPage() {
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideSetpoint, setOverrideSetpoint] = useState<number | null>(null);
 
-  // NEW: Fan + Humidifier + Heater status
+  // Fan + Humidifier + Heater status
   const [fan, setFan] = useState(0); // 0–100%
   const [humidifier, setHumidifier] = useState(false);
   const [heaterStatus, setHeaterStatus] = useState(false);
 
   const [schedule, setSchedule] = useState([
     { at: 6 * 60, temp: 22.0 },
-    { at: 9 * 60, temp: 20.0 },
-    { at: 17 * 60, temp: 22.5 },
-    { at: 22 * 60, temp: 19.5 },
   ]);
 
   // LOAD SENSOR DATA
@@ -127,7 +124,7 @@ export default function ThermostatPage() {
   const scheduledTemp = computeScheduledTemp(schedule);
   const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
 
-  const hysteresis = 0.3;
+  const hysteresis = 0.5;
 
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
@@ -161,23 +158,23 @@ export default function ThermostatPage() {
   }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, fan, humidifier]);
 
   // SIMULATED TEMPERATURE DRIFT
-  useEffect(() => {
-    const t = setInterval(() => {
-      setCurrentTemp((v) => {
-        const drift =
-            heatCall ? +0.03 :
-            coolCall ? -0.03 :
-            0;
-        return Math.round((v + drift) * 10) / 10;
-      });
-    }, 400);
-    return () => clearInterval(t);
-  }, [heatCall]);
+  // useEffect(() => {
+  //   const t = setInterval(() => {
+  //     setCurrentTemp((v) => {
+  //       const drift =
+  //         heatCall ? +0.03 :
+  //           coolCall ? -0.03 :
+  //             0;
+  //       return Math.round((v + drift) * 10) / 10;
+  //     });
+  //   }, 400);
+  //   return () => clearInterval(t);
+  // }, [heatCall]);
 
 
   // DIAL LOGIC
   const minTemp = 10;
-  const maxTemp = 30;
+  const maxTemp = 40;
 
   const [dragging, setDragging] = useState(false);
 
@@ -213,9 +210,9 @@ export default function ThermostatPage() {
   const gap = circumference - dash;
 
   const coolCall = useMemo(() => {
-  if (mode === "OFF") return false;
-  return currentTemp > effectiveSetpoint + hysteresis;
-}, [mode, currentTemp, effectiveSetpoint]);
+    if (mode === "OFF") return false;
+    return currentTemp > effectiveSetpoint + hysteresis;
+  }, [mode, currentTemp, effectiveSetpoint]);
 
 
   return (
@@ -237,25 +234,22 @@ export default function ThermostatPage() {
 
         <div className="flex items-center gap-2">
           <button
-            className={`rounded-full px-3 py-1 text-sm border ${
-              mode === "HEAT" ? "bg-white/10" : "bg-transparent"
-            }`}
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
+              }`}
             onClick={() => setMode("HEAT")}
           >
             Heat
           </button>
           <button
-            className={`rounded-full px-3 py-1 text-sm border ${
-              mode === "AUTO" ? "bg-white/10" : "bg-transparent"
-            }`}
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "AUTO" ? "bg-white/10" : "bg-transparent"
+              }`}
             onClick={() => setMode("AUTO")}
           >
             Auto
           </button>
           <button
-            className={`rounded-full px-3 py-1 text-sm border ${
-              mode === "OFF" ? "bg-white/10" : "bg-transparent"
-            }`}
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent"
+              }`}
             onClick={() => setMode("OFF")}
           >
             Off
@@ -311,14 +305,14 @@ export default function ThermostatPage() {
                   strokeDasharray={`${dash} ${gap}`}
                   transform="rotate(-210 100 100)"
                   className={
-                      mode === "OFF"
-                        ? "text-zinc-700"
-                        : heatCall
+                    mode === "OFF"
+                      ? "text-zinc-700"
+                      : heatCall
                         ? "text-orange-400"
                         : coolCall
-                        ? "text-blue-400"
-                        : "text-sky-400"
-                      }
+                          ? "text-blue-400"
+                          : "text-sky-400"
+                  }
                 />
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
@@ -326,10 +320,10 @@ export default function ThermostatPage() {
                   {mode === "OFF"
                     ? "System Off"
                     : heatCall
-                    ? "Heating"
-                    : coolCall
-                    ? "Cooling"
-                    : "Holding"}
+                      ? "Heating"
+                      : coolCall
+                        ? "Cooling"
+                        : "Holding"}
                 </div>
                 <div className="mt-2 text-5xl font-semibold tabular-nums">
                   {effectiveSetpoint.toFixed(1)}°
@@ -405,29 +399,29 @@ export default function ThermostatPage() {
 
           {/* OUTPUT STATUS */}
           <div className="mt-6 grid gap-3 sm:grid-cols-3">
-              {/* Heater */}
-              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-                <div className="text-xs opacity-60">Heater Output</div>
-                <div className="mt-1 text-sm font-medium">
-                  {heaterStatus ? "ON (ESP32)" : "OFF"}
-                </div>
+            {/* Heater */}
+            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+              <div className="text-xs opacity-60">Heater Output</div>
+              <div className="mt-1 text-sm font-medium">
+                {heaterStatus ? "ON (ESP32)" : "OFF"}
               </div>
+            </div>
 
-              {/* Cooling */}
-              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-                <div className="text-xs opacity-60">Cooling Output</div>
-                <div className="mt-1 text-sm font-medium">
-                  {coolCall ? "ON (Fan)" : "OFF"}
-                </div>
+            {/* Cooling */}
+            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+              <div className="text-xs opacity-60">Cooling Output</div>
+              <div className="mt-1 text-sm font-medium">
+                {coolCall ? "ON (Fan)" : "OFF"}
               </div>
+            </div>
 
-              {/* Setpoint Source */}
-              <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-                <div className="text-xs opacity-60">Setpoint Source</div>
-                <div className="mt-1 text-sm font-medium">
-                  {useSchedule ? "Schedule" : "Manual"}
-                </div>
+            {/* Setpoint Source */}
+            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
+              <div className="text-xs opacity-60">Setpoint Source</div>
+              <div className="mt-1 text-sm font-medium">
+                {useSchedule ? "Schedule" : "Manual"}
               </div>
+            </div>
           </div>
 
           {/* FAN + HUMIDIFIER CONTROLS */}
@@ -453,11 +447,10 @@ export default function ThermostatPage() {
               <div className="text-sm opacity-60">Humidifier</div>
               <button
                 onClick={() => setHumidifier((v) => !v)}
-                className={`mt-3 px-4 py-2 rounded-lg text-sm ${
-                  humidifier
+                className={`mt-3 px-4 py-2 rounded-lg text-sm ${humidifier
                     ? "bg-emerald-600 text-white"
                     : "bg-zinc-800 text-zinc-300"
-                }`}
+                  }`}
               >
                 {humidifier ? "ON" : "OFF"}
               </button>

@@ -109,7 +109,7 @@ def send_actuator_commands():
         return
 
     current_temp, current_hum = row
-    hysteresis = 0.3
+    lag = 0.3
 
     # OVERRIDE MODE
     if state.get("overrideMode") and state.get("overrideSetpoint") is not None:
@@ -128,9 +128,9 @@ def send_actuator_commands():
     # HEAT MODE
     if mode == "HEAT":
         # Heater logic
-        if current_temp < setpoint - hysteresis:
+        if current_temp < setpoint - lag:
             heater_on = True
-        elif current_temp > setpoint + hysteresis:
+        elif current_temp > setpoint + lag:
             heater_on = False
 
         # Cooling fan logic (PWM)
@@ -140,10 +140,10 @@ def send_actuator_commands():
         else:
             fan_pwm = 0
 
-        # Humidifier logic
-        if current_hum < 40:
+        # Humidifier logic, for class, doesnt go past 20
+        if current_hum < 15:
             humidifier_on = True
-        elif current_hum > 45:
+        elif current_hum > 25:
             humidifier_on = False
 
     update_backend(heater=heater_on, fan=fan_pwm, humidifier=humidifier_on)
@@ -199,7 +199,7 @@ while True:
             ))
             conn.commit()
             
-            print("Saved:", ts, data)
+            print("Data:", ts, data)
 
 
     # PERIODIC ACTUATOR LOGIC
