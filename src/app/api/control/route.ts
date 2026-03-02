@@ -4,16 +4,15 @@ import { NextResponse } from "next/server";
 type ScheduleEntry = { at: number; temp: number };
 
 let lastCommand: {
-  mode: "OFF" | "HEAT";
+  mode: "OFF" | "HEAT" | "COOL" | "AUTO";
   setpoint: number;
   useSchedule: boolean;
   schedule: ScheduleEntry[];
   overrideMode: boolean;
   overrideSetpoint: number | null;
   heater: boolean;
-  fan: boolean;
   humidifier: boolean;
-  led: boolean;
+  cooling_fan: number;
 } = {
   mode: "HEAT",
   setpoint: 22,
@@ -22,9 +21,8 @@ let lastCommand: {
   overrideMode: false,
   overrideSetpoint: null,
   heater: false,
-  fan: false,
   humidifier: false,
-  led: false,
+  cooling_fan: 0,
 };
 
 export async function GET() {
@@ -48,9 +46,8 @@ export async function POST(req: Request) {
       lastCommand.overrideSetpoint = body.overrideSetpoint;
 
     if ("heater" in body) lastCommand.heater = !!body.heater;
-    if ("fan" in body) lastCommand.fan = !!body.fan;
     if ("humidifier" in body) lastCommand.humidifier = !!body.humidifier;
-    if ("led" in body) lastCommand.led = !!body.led;
+    if ("cooling_fan" in body) lastCommand.cooling_fan = body.cooling_fan;
 
     return NextResponse.json(lastCommand);
   } catch {

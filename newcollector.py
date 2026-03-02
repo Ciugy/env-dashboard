@@ -150,12 +150,12 @@ def send_actuator_commands():
 
 
 # UPDATE BACKEND STATE
-def update_backend(heater: bool, fan: int, humidifier: bool):
+def update_backend(heater: bool, humidifier: bool, cooling_fan: int):
     try:
         requests.post(CONTROL_URL, json={
             "heater": heater,
-            "fan": fan,
-            "humidifier": humidifier
+            "humidifier": humidifier,
+            "cooling_fan": cooling_fan
         }, timeout=1)
     except:
         pass

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 
-type Mode = "HEAT" | "OFF" | "AUTO";
+type Mode = "HEAT" | "OFF" | "AUTO" | "COOL";
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
@@ -39,8 +39,8 @@ export default function ThermostatPage() {
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideSetpoint, setOverrideSetpoint] = useState<number | null>(null);
 
-  // Fan + Humidifier + Heater status
-  const [fan, setFan] = useState(0); // 0–100%
+  // Cooling Fan + Humidifier + Heater status
+  const [coolingFan, setCoolingFan] = useState(0);
   const [humidifier, setHumidifier] = useState(false);
   const [heaterStatus, setHeaterStatus] = useState(false);
 
@@ -90,9 +90,10 @@ export default function ThermostatPage() {
         setOverrideMode(data.overrideMode);
         setOverrideSetpoint(data.overrideSetpoint);
 
-        setFan(data.fan ?? 0);
+        setCoolingFan(data.cooling_fan ?? 0);
         setHumidifier(data.humidifier ?? false);
         setHeaterStatus(data.heater ?? false);
+
       } catch (err) {
         console.error("Failed to load control state", err);
       }
@@ -142,7 +143,7 @@ export default function ThermostatPage() {
         schedule,
         overrideMode,
         overrideSetpoint,
-        fan: coolCall ? 100 : fan,   // auto cooling
+        cooling_fan: coolingFan,
         humidifier
       };
 
@@ -155,7 +156,7 @@ export default function ThermostatPage() {
     }
 
     send();
-  }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, fan, humidifier]);
+  }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, coolingFan, humidifier]);
 
   // SIMULATED TEMPERATURE DRIFT
   // useEffect(() => {
@@ -239,6 +240,13 @@ export default function ThermostatPage() {
             onClick={() => setMode("HEAT")}
           >
             Heat
+          </button>
+          <button
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
+              }`}
+            onClick={() => setMode("COOL")}
+          >
+            Cool
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "AUTO" ? "bg-white/10" : "bg-transparent"
@@ -433,12 +441,12 @@ export default function ThermostatPage() {
                 type="range"
                 min={0}
                 max={100}
-                value={fan}
-                onChange={(e) => setFan(Number(e.target.value))}
+                value={coolingFan}
+                onChange={(e) => setCoolingFan(Number(e.target.value))}
                 className="w-full mt-3"
               />
               <div className="mt-2 text-sm opacity-80">
-                Speed: <span className="font-medium">{fan}%</span>
+                Speed: <span className="font-medium">{coolingFan}%</span>
               </div>
             </div>
 
@@ -471,7 +479,7 @@ export default function ThermostatPage() {
 
               <div>
                 <div className="text-xs opacity-60">Cooling Fan</div>
-                <div className="mt-1 text-sm font-medium">{fan}%</div>
+                <div className="mt-1 text-sm font-medium">{coolingFan}%</div>
               </div>
 
               <div>
