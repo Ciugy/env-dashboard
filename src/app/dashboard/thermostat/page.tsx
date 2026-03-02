@@ -159,21 +159,6 @@ export default function ThermostatPage() {
     send();
   }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, coolingFan, humidifier]);
 
-  // SIMULATED TEMPERATURE DRIFT
-  // useEffect(() => {
-  //   const t = setInterval(() => {
-  //     setCurrentTemp((v) => {
-  //       const drift =
-  //         heatCall ? +0.03 :
-  //           coolCall ? -0.03 :
-  //             0;
-  //       return Math.round((v + drift) * 10) / 10;
-  //     });
-  //   }, 400);
-  //   return () => clearInterval(t);
-  // }, [heatCall]);
-
-
   // DIAL LOGIC
   const minTemp = 10;
   const maxTemp = 40;
@@ -258,7 +243,7 @@ export default function ThermostatPage() {
             Auto
           </button>
           <button
-            className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent"
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent hover: bg-brisque"
               }`}
             onClick={() => setMode("OFF")}
           >
