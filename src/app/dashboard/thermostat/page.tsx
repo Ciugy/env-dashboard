@@ -29,8 +29,7 @@ type SensorData = {
 
 export default function ThermostatPage() {
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
-  const [currentTemp, setCurrentTemp] = useState(22.3);
-
+  const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.0);
   // CONTROL STATE
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0);
@@ -224,14 +223,14 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => setMode("HEAT")}
+            onClick={() => {setMode("HEAT"); setHeaterStatus(true)} }
           >
             Heat
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => { setMode("COOL"); setCoolingFan(25); }} // Sets the fan speed to a low setting, unless the user changes it with the slider
+            onClick={() => { setMode("COOL"); setCoolingFan(25); setHeaterStatus(false) }} // Sets the fan speed to a low setting, unless the user changes it with the slider
           >
             Cool
           </button>
@@ -243,7 +242,7 @@ export default function ThermostatPage() {
             Auto
           </button>
           <button
-            className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent hover: bg-brisque"
+            className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent"
               }`}
             onClick={() => setMode("OFF")}
           >
