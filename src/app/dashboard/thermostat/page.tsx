@@ -129,6 +129,7 @@ export default function ThermostatPage() {
 
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
+    if (mode === "COOL") return false;
     return currentTemp < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
@@ -212,6 +213,7 @@ export default function ThermostatPage() {
 
   const coolCall = useMemo(() => {
     if (mode === "OFF") return false;
+    if (mode === "HEAT") return false;
     return currentTemp > effectiveSetpoint + hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
@@ -237,14 +239,14 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => {setMode("HEAT"); heatCall ? "Heater ON" : "Heater OFF"}}
+            onClick={() => setMode("HEAT")}
           >
             Heat
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => { setMode("COOL"); setCoolingFan(25); coolCall ? "Cooling ON" : "Cooling OFF" }} // Sets the fan speed to a low setting, unless the user changes it with the slider
+            onClick={() => { setMode("COOL"); setCoolingFan(25); }} // Sets the fan speed to a low setting, unless the user changes it with the slider
           >
             Cool
           </button>
