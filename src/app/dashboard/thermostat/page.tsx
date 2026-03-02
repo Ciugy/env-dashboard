@@ -129,7 +129,7 @@ export default function ThermostatPage() {
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "COOL") return false;
-    return currentTemp < effectiveSetpoint - hysteresis;
+    return Number(currentTemp) < effectiveSetpoint - hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
 
@@ -198,7 +198,7 @@ export default function ThermostatPage() {
   const coolCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "HEAT") return false;
-    return currentTemp > effectiveSetpoint + hysteresis;
+    return Number(currentTemp) > effectiveSetpoint + hysteresis;
   }, [mode, currentTemp, effectiveSetpoint]);
 
 
@@ -223,7 +223,7 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => {setMode("HEAT"); setHeaterStatus(true)} }
+            onClick={() => {setMode("HEAT"); setHeaterStatus(true) ; setCoolingFan(0)} }
           >
             Heat
           </button>
@@ -244,7 +244,7 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => setMode("OFF")}
+            onClick={() => {setMode("OFF"); setCoolingFan(0)}}
           >
             Off
           </button>
