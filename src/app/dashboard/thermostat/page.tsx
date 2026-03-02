@@ -244,7 +244,7 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => setMode("COOL")}
+            onClick={() => { setMode("COOL"); setCoolingFan(25); }} // Sets the fan speed to a low setting, unless the user changes it with the slider
           >
             Cool
           </button>
