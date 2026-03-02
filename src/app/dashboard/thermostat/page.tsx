@@ -29,7 +29,7 @@ type SensorData = {
 
 export default function ThermostatPage() {
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
-  const [currentTemp, setCurrentTemp] = useState<SensorData["temp"]>(22.0);
+  const currentTemp = sensorReadings[sensorReadings.length - 1]?.temp.toFixed(1);
   // CONTROL STATE
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0);
