@@ -237,14 +237,14 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => setMode("HEAT")}
+            onClick={() => {setMode("HEAT"); heatCall ? "Heater ON" : "Heater OFF"}}
           >
             Heat
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => { setMode("COOL"); setCoolingFan(25); }} // Sets the fan speed to a low setting, unless the user changes it with the slider
+            onClick={() => { setMode("COOL"); setCoolingFan(25); coolCall ? "Cooling ON" : "Cooling OFF" }} // Sets the fan speed to a low setting, unless the user changes it with the slider
           >
             Cool
           </button>
@@ -344,7 +344,7 @@ export default function ThermostatPage() {
 
                   return (
                     <div className="mt-2 text-xs text-center opacity-80">
-                      <span className="font-medium">Sensor reading:</span>{" "}
+                      <span className="font-medium">LastTemp:</span>{" "}
                       {last.temp.toFixed(1)}°C
                       {prev && (
                         <span className="ml-2">
