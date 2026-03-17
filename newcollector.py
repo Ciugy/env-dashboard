@@ -122,7 +122,7 @@ def send_actuator_commands():
 
     # OFF MODE
     if mode == "OFF":
-        update_backend(heater=False, fan=0, humidifier=False)
+        update_backend(heater=False, humidifier=False, cooling_fan=0)
         return
 
     # HEAT MODE
@@ -146,7 +146,7 @@ def send_actuator_commands():
         elif current_hum > 25:
             humidifier_on = False
 
-    update_backend(heater=heater_on, fan=fan_pwm, humidifier=humidifier_on)
+    update_backend(heater=heater_on, humidifier=humidifier_on, cooling_fan=fan_pwm)
 
 
 # UPDATE BACKEND STATE

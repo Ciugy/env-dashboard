@@ -80,6 +80,7 @@ function StatusBadge({ co2 }: { co2: number }) {
 
 export default function Dashboard() {
   const [readings, setReadings] = useState<Reading[]>([]);
+  const [interval, _setInterval] = useState(5000);
 
   // Fetch DB data every 5 seconds
   useEffect(() => {
@@ -101,9 +102,9 @@ export default function Dashboard() {
   }
 
   load();
-  const interval = setInterval(load, 5000);
-  return () => clearInterval(interval);
-}, []);
+  const refreshRate = setInterval(load, interval);
+  return () => clearInterval(refreshRate);
+}, [interval]);
 
 
   const latest = readings[0];
