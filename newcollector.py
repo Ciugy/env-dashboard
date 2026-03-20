@@ -140,11 +140,14 @@ def send_actuator_commands():
         else:
             fan_pwm = 0
 
+        # Overwrite the humidifier
+        
+
         # Humidifier logic, for class, doesnt go past 20
-        if current_hum < 15:
-            humidifier_on = True
-        elif current_hum > 25:
-            humidifier_on = False
+        # if current_hum < 15:
+        #     humidifier_on = True
+        # elif current_hum > 25:
+        #     humidifier_on = False
 
     update_backend(heater=heater_on, humidifier=humidifier_on, cooling_fan=fan_pwm)
 
