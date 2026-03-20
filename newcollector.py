@@ -116,9 +116,9 @@ def send_actuator_commands():
         setpoint = state["overrideSetpoint"]
 
     # Default actuator states
-    heater_on = False
-    fan_pwm = 0
-    humidifier_on = False
+    #heater_on = False
+    #fan_pwm = 0
+    # humidifier_on = False
 
     # OFF MODE
     if mode == "OFF":
