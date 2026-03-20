@@ -1,7 +1,6 @@
 import sqlite3
 import serial
 import time
-import json
 from datetime import datetime
 import requests
 
@@ -45,7 +44,6 @@ def handle_override_command(cmd):
     except:
         return
 
-    # Initialize override setpoint if missing
     if state.get("overrideSetpoint") is None:
         state["overrideSetpoint"] = state.get("setpoint", 22)
 
@@ -56,12 +54,10 @@ def handle_override_command(cmd):
         requests.post(CONTROL_URL, json={"overrideMode": False})
 
     elif cmd == "SP+":
-        new_sp = state["overrideSetpoint"] + 0.5
-        requests.post(CONTROL_URL, json={"overrideSetpoint": new_sp})
+        requests.post(CONTROL_URL, json={"overrideSetpoint": state["overrideSetpoint"] + 0.5})
 
     elif cmd == "SP-":
-        new_sp = state["overrideSetpoint"] - 0.5
-        requests.post(CONTROL_URL, json={"overrideSetpoint": new_sp})
+        requests.post(CONTROL_URL, json={"overrideSetpoint": state["overrideSetpoint"] - 0.5})
 
     elif cmd == "H":
         requests.post(CONTROL_URL, json={"heater": True})
@@ -117,10 +113,10 @@ def send_actuator_commands():
     if state.get("overrideMode") and state.get("overrideSetpoint") is not None:
         setpoint = state["overrideSetpoint"]
 
-    # Default actuator states
-    heater_on = False
-    fan_pwm = 0
-    humidifier_on = False
+    # Start with current backend values
+    heater_on = state.get("heater", False)
+    fan_pwm = state.get("cooling_fan", 0)
+    humidifier_on = state.get("humidifier", False)
 
     # OFF MODE
     if mode == "OFF":
@@ -129,20 +125,20 @@ def send_actuator_commands():
 
     # HEAT MODE
     if mode == "HEAT":
+
         # Heater logic
         if current_temp < setpoint - lag:
             heater_on = True
         elif current_temp > setpoint + lag:
             heater_on = False
 
-        # Cooling fan logic (PWM)
+        # Cooling fan logic
         if current_temp > setpoint + 1:
             diff = current_temp - setpoint
             fan_pwm = min(int(diff * 50), 255)
-        else:
-            fan_pwm = 0
+        # else: keep user-set fan_pwm
 
-        # Humidifier logic (restored)
+        # Humidifier logic 
         if current_hum < 15:
             humidifier_on = True
         elif current_hum > 25:
@@ -200,7 +196,7 @@ while True:
                 data.get("scd_hum")
             ))
             conn.commit()
-            
+
             print("Data:", ts, data)
 
     # PERIODIC ACTUATOR LOGIC
