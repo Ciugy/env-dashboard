@@ -52,6 +52,9 @@ def handle_override_command(cmd):
     if cmd == "O1":
         requests.post(CONTROL_URL, json={"overrideMode": True})
 
+    elif cmd == "O0":
+        requests.post(CONTROL_URL, json={"overrideMode": False})
+
     elif cmd == "SP+":
         new_sp = state["overrideSetpoint"] + 0.5
         requests.post(CONTROL_URL, json={"overrideSetpoint": new_sp})
@@ -67,10 +70,10 @@ def handle_override_command(cmd):
         requests.post(CONTROL_URL, json={"heater": False})
 
     elif cmd == "F":
-        requests.post(CONTROL_URL, json={"fan": 100})
+        requests.post(CONTROL_URL, json={"cooling_fan": 100})
 
     elif cmd == "f":
-        requests.post(CONTROL_URL, json={"fan": 0})
+        requests.post(CONTROL_URL, json={"cooling_fan": 0})
 
 
 # PARSE SENSOR CSV LINES
@@ -88,7 +91,6 @@ def parse_line(line: str):
                 continue
             data[key] = value
     return data
-
 
 
 # ACTUATOR LOGIC
@@ -116,9 +118,9 @@ def send_actuator_commands():
         setpoint = state["overrideSetpoint"]
 
     # Default actuator states
-    #heater_on = False
-    #fan_pwm = 0
-    # humidifier_on = False
+    heater_on = False
+    fan_pwm = 0
+    humidifier_on = False
 
     # OFF MODE
     if mode == "OFF":
@@ -140,14 +142,11 @@ def send_actuator_commands():
         else:
             fan_pwm = 0
 
-        # Overwrite the humidifier
-        
-
-        # Humidifier logic, for class, doesnt go past 20
-        # if current_hum < 15:
-        #     humidifier_on = True
-        # elif current_hum > 25:
-        #     humidifier_on = False
+        # Humidifier logic (restored)
+        if current_hum < 15:
+            humidifier_on = True
+        elif current_hum > 25:
+            humidifier_on = False
 
     update_backend(heater=heater_on, humidifier=humidifier_on, cooling_fan=fan_pwm)
 
@@ -203,7 +202,6 @@ while True:
             conn.commit()
             
             print("Data:", ts, data)
-
 
     # PERIODIC ACTUATOR LOGIC
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
