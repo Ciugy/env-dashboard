@@ -118,13 +118,14 @@ def send_actuator_commands():
     fan_pwm = state.get("cooling_fan", 0)
     humidifier_on = state.get("humidifier", False)
 
-    # OFF MODE
+
     if mode == "OFF":
         update_backend(heater=False, humidifier=False, cooling_fan=0)
         return
 
-    # HEAT MODE
     if mode == "HEAT":
+        # Always start with whatever the user set
+        fan_pwm = state.get("cooling_fan", 0)
 
         # Heater logic
         if current_temp < setpoint - lag:
@@ -132,17 +133,50 @@ def send_actuator_commands():
         elif current_temp > setpoint + lag:
             heater_on = False
 
-        # Cooling fan logic
-        if current_temp > setpoint + 1:
-            diff = current_temp - setpoint
-            fan_pwm = min(int(diff * 50), 255)
-        # else: keep user-set fan_pwm
-
-        # Humidifier logic 
+        # Humidifier logic
         if current_hum < 15:
             humidifier_on = True
         elif current_hum > 25:
             humidifier_on = False
+
+
+    if mode == "COOL":
+
+        # Always start with user-set values
+        fan_pwm = state.get("cooling_fan", 0)
+        heater_on = False
+        humidifier_on = state.get("humidifier", False)
+
+    if mode == "AUTO":
+
+        # Start with user-set values (fallback)
+        fan_pwm = state.get("cooling_fan", 0)
+        heater_on = state.get("heater", False)
+        humidifier_on = state.get("humidifier", False)
+
+        diff = current_temp - setpoint
+
+        
+        if diff > 0.5:
+            # Smooth proportional fan control
+            # 0.5°C above = ~20% fan
+            # 3°C above = 100% fan
+            auto_fan = int((diff / 3.0) * 100)
+            auto_fan = min(max(auto_fan, 20), 100)
+            fan_pwm = auto_fan
+            heater_on = False
+
+        # AUTO HEATING LOGIC 
+        elif diff < -0.5:
+            heater_on = True
+            fan_pwm = 30  # gentle airflow during heating
+
+        # COMFORT BAND 
+        else:
+            # Within ±0.5°C → maintain comfort
+            heater_on = False
+            # Let the user control the fan inside the comfort zone
+            fan_pwm = state.get("cooling_fan", 0)
 
     update_backend(heater=heater_on, humidifier=humidifier_on, cooling_fan=fan_pwm)
 
