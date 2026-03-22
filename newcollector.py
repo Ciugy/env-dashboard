@@ -10,8 +10,9 @@ BAUD_RATE = 115200
 CONTROL_URL = "http://localhost:3000/api/control"
 DB_PATH = "./src/app/api/data/sensor_data.db"
 
-POLL_INTERVAL = 0.10
-SENSOR_INTERVAL = 0.05
+POLL_INTERVAL = 1.0      
+SENSOR_INTERVAL = 0.05   
+
 
 # DATABASE SETUP
 conn = sqlite3.connect(DB_PATH, check_same_thread=False)
@@ -34,6 +35,14 @@ conn.commit()
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
+
+# LATEST SENSOR VALUES 
+latest_temp = None
+latest_hum = None
+latest_press = None
+latest_gas = None
+latest_co2 = None
+
 
 
 # HANDLE OVERRIDE COMMANDS FROM ARDUINO
@@ -91,6 +100,12 @@ def parse_line(line: str):
 
 # ACTUATOR LOGIC
 def send_actuator_commands():
+    global latest_temp, latest_hum
+
+    # Need valid sensor data
+    if latest_temp is None or latest_hum is None:
+        return
+
     try:
         res = requests.get(CONTROL_URL, timeout=1)
         state = res.json()
@@ -99,34 +114,29 @@ def send_actuator_commands():
 
     mode = state.get("mode")
     setpoint = state.get("setpoint")
-
-    # Read latest temperature + humidity
-    cursor.execute("SELECT bme_temp, scd_hum FROM sensor_data ORDER BY id DESC LIMIT 1")
-    row = cursor.fetchone()
-    if not row:
+    if setpoint is None:
         return
 
-    current_temp, current_hum = row
+    current_temp = latest_temp
+    current_hum = latest_hum
     lag = 0.3
 
-    # OVERRIDE MODE
+    # Apply override setpoint if active
     if state.get("overrideMode") and state.get("overrideSetpoint") is not None:
         setpoint = state["overrideSetpoint"]
 
-    # Start with current backend values
+    # Start with backend values
     heater_on = state.get("heater", False)
     fan_pwm = state.get("cooling_fan", 0)
     humidifier_on = state.get("humidifier", False)
 
-
+    # OFF MODE
     if mode == "OFF":
         update_backend(heater=False, humidifier=False, cooling_fan=0)
         return
 
+    # HEAT MODE
     if mode == "HEAT":
-        # Always start with whatever the user set
-        fan_pwm = state.get("cooling_fan", 0)
-
         # Heater logic
         if current_temp < setpoint - lag:
             heater_on = True
@@ -139,46 +149,49 @@ def send_actuator_commands():
         elif current_hum > 25:
             humidifier_on = False
 
+        # Fan ALWAYS stays user-controlled in HEAT
+        fan_pwm = state.get("cooling_fan", 0)
 
+    # COOL MODE
     if mode == "COOL":
-
-        # Always start with user-set values
-        fan_pwm = state.get("cooling_fan", 0)
-        heater_on = False
+        heater_on = False  # never heat in COOL
         humidifier_on = state.get("humidifier", False)
 
+        # Fan ALWAYS stays user-controlled in COOL
+        fan_pwm = state.get("cooling_fan", 0)
+
+    # AUTO MODE (car-style HVAC)
     if mode == "AUTO":
-
-        # Start with user-set values (fallback)
-        fan_pwm = state.get("cooling_fan", 0)
-        heater_on = state.get("heater", False)
-        humidifier_on = state.get("humidifier", False)
-
         diff = current_temp - setpoint
 
-        
+        # AUTO COOLING
         if diff > 0.5:
-            # Smooth proportional fan control
-            # 0.5°C above = ~20% fan
-            # 3°C above = 100% fan
             auto_fan = int((diff / 3.0) * 100)
             auto_fan = min(max(auto_fan, 20), 100)
             fan_pwm = auto_fan
             heater_on = False
 
-        # AUTO HEATING LOGIC 
+        # AUTO HEATING
         elif diff < -0.5:
             heater_on = True
-            fan_pwm = 30  # gentle airflow during heating
+            fan_pwm = 30  # gentle airflow
 
-        # COMFORT BAND 
+        # COMFORT BAND
         else:
-            # Within ±0.5°C → maintain comfort
             heater_on = False
-            # Let the user control the fan inside the comfort zone
             fan_pwm = state.get("cooling_fan", 0)
 
-    update_backend(heater=heater_on, humidifier=humidifier_on, cooling_fan=fan_pwm)
+        # Humidifier logic in AUTO
+        if current_hum < 15:
+            humidifier_on = True
+        elif current_hum > 25:
+            humidifier_on = False
+
+    update_backend(
+        heater=heater_on,
+        humidifier=humidifier_on,
+        cooling_fan=fan_pwm
+    )
 
 
 # UPDATE BACKEND STATE
@@ -196,6 +209,7 @@ def update_backend(heater: bool, humidifier: bool, cooling_fan: int):
 print("Listening for sensor data...")
 
 last_actuator_poll = time.time()
+
 
 while True:
     try:
@@ -216,6 +230,14 @@ while True:
         if data:
             ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
+            # Update in-memory latest values
+            latest_temp = data.get("bme_temp", latest_temp)
+            latest_press = data.get("bme_press", latest_press)
+            latest_gas = data.get("bme_gas", latest_gas)
+            latest_co2 = data.get("scd_co2", latest_co2)
+            latest_hum = data.get("scd_hum", latest_hum)
+
+            # Store to DB 
             cursor.execute("""
                 INSERT INTO sensor_data (
                     timestamp, bme_temp, bme_press, bme_gas,
@@ -233,7 +255,7 @@ while True:
 
             print("Data:", ts, data)
 
-    # PERIODIC ACTUATOR LOGIC
+    # PERIODIC ACTUATOR LOGIC 
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()

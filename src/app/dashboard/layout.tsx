@@ -1,5 +1,4 @@
 import Sidebar from "@/components/ui/layout/Sidebar";
-import ThemeToggle from "@/components/ui/layout/ThemeToggle";
 
 export default function DashboardLayout({
   children,
@@ -12,7 +11,6 @@ export default function DashboardLayout({
         <div className="flex">
           <Sidebar />
         </div>
-          <ThemeToggle />
       </nav>
 
       <div className="p-4 md:p-8 max-w-6xl mx-auto">{children}</div>
