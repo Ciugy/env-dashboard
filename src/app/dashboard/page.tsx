@@ -78,9 +78,53 @@ function StatusBadge({ co2 }: { co2: number }) {
   );
 }
 
+function convertToCSV(readings: Reading[]): string {
+  const headers = [
+    "Timestamp",
+    "Temperature (°C)",
+    "Humidity (%)",
+    "Pressure (hPa)",
+    "Gas Resistance (Ω)",
+    "CO2 (ppm)",
+    "SCD Temp (°C)",
+    "SCD Humidity (%)",
+  ];
+
+  const rows = readings.map((r) => [
+    r.timestamp,
+    r.bme_temp,
+    r.bme_hum,
+    r.bme_press,
+    r.bme_gas,
+    r.scd_co2,
+    r.scd_temp,
+    r.scd_hum,
+  ]);
+
+  const csvContent = [
+    headers.join(","),
+    ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
+  ].join("\n");
+
+  return csvContent;
+}
+
+function downloadFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 export default function Dashboard() {
   const [readings, setReadings] = useState<Reading[]>([]);
   const [interval, _setInterval] = useState(5000);
+  const [isExporting, setIsExporting] = useState(false);
 
   // Fetch DB data every 5 seconds
   useEffect(() => {
@@ -105,6 +149,28 @@ export default function Dashboard() {
   const refreshRate = setInterval(load, interval);
   return () => clearInterval(refreshRate);
 }, [interval]);
+
+  const handleExportCSV = () => {
+    setIsExporting(true);
+    try {
+      const csv = convertToCSV(readings);
+      const timestamp = new Date().toISOString().slice(0, 10);
+      downloadFile(csv, `sensor-readings-${timestamp}.csv`, "text/csv");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
+  const handleExportJSON = () => {
+    setIsExporting(true);
+    try {
+      const json = JSON.stringify(readings, null, 2);
+      const timestamp = new Date().toISOString().slice(0, 10);
+      downloadFile(json, `sensor-readings-${timestamp}.json`, "application/json");
+    } finally {
+      setIsExporting(false);
+    }
+  };
 
 
   const latest = readings[0];
@@ -225,6 +291,29 @@ export default function Dashboard() {
         <div className="text-sm opacity-70">Location</div>
         <div className="mt-2 text-sm opacity-80">
          <UserLocation />
+        </div>
+      </div>
+
+      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
+        <div className="text-sm opacity-70">Data Export</div>
+        <div className="mt-3 text-xs opacity-80 mb-4">
+          Download {readings.length} readings in your preferred format
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={handleExportCSV}
+            disabled={isExporting || readings.length === 0}
+            className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            {isExporting ? "Exporting..." : "CSV"}
+          </button>
+          <button
+            onClick={handleExportJSON}
+            disabled={isExporting || readings.length === 0}
+            className="flex-1 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            {isExporting ? "Exporting..." : "JSON"}
+          </button>
         </div>
       </div>
     </div>
