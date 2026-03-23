@@ -16,7 +16,7 @@ interface CommandState {
 }
 
 let lastCommand: CommandState = {
-  mode: "HEAT",
+  mode: "OFF",
   setpoint: 22,
   useSchedule: false,
   schedule: [],
@@ -47,7 +47,7 @@ export async function POST(req: Request) {
       }
     }
 
-    // SETPOINT
+    // SETPOINT, checks if its a valid value !isNaN = NOT a Number
     if ("setpoint" in body) {
       const sp = Number(body.setpoint);
       if (!isNaN(sp) && sp >= 5 && sp <= 40) {
@@ -82,6 +82,7 @@ export async function POST(req: Request) {
 
     if ("cooling_fan" in body) {
       const fan = Number(body.cooling_fan);
+      // Checks if its a number and if its between 0-100
       if (!isNaN(fan)) {
         lastCommand.cooling_fan = Math.min(Math.max(fan, 0), 100);
       }

@@ -75,7 +75,7 @@ export default function ThermostatPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // LOAD CONTROL STATE FROM BACKEND
+  // CONTROL STATE FROM BACKEND, only loads once the page loads
   useEffect(() => {
     async function loadControl() {
       try {
@@ -97,11 +97,37 @@ export default function ThermostatPage() {
         console.error("Failed to load control state", err);
       }
     }
-
     loadControl();
-    const interval = setInterval(loadControl, 1000);
-    return () => clearInterval(interval);
   }, []);
+
+
+  // OLD POLLING JUST IN CASE
+  // useEffect(() => {
+  //   async function loadControl() {
+  //     try {
+  //       const res = await fetch("/api/control");
+  //       const data = await res.json();
+
+  //       setMode(data.mode);
+  //       setTargetTemp(data.setpoint);
+  //       setUseSchedule(data.useSchedule);
+  //       setSchedule(data.schedule);
+  //       setOverrideMode(data.overrideMode);
+  //       setOverrideSetpoint(data.overrideSetpoint);
+
+  //       setCoolingFan(data.cooling_fan ?? 0);
+  //       setHumidifier(data.humidifier ?? false);
+  //       setHeaterStatus(data.heater ?? false);
+
+  //     } catch (err) {
+  //       console.error("Failed to load control state", err);
+  //     }
+  //   }
+
+  //   loadControl();
+  //   const interval = setInterval(loadControl, 1000);
+  //   return () => clearInterval(interval);
+  // }, []);
 
 
   function computeScheduledTemp(schedule: { at: number; temp: number }[]) {
@@ -134,29 +160,85 @@ export default function ThermostatPage() {
 
 
   // SEND CONTROL STATE TO BACKEND
-  useEffect(() => {
-    async function send() {
-      const payload = {
-        mode,
-        setpoint: targetTemp,
-        useSchedule,
-        schedule,
-        overrideMode,
-        overrideSetpoint,
-        cooling_fan: coolingFan,
-        humidifier
-      };
+    useEffect(() => {
+    const payload = {
+      mode,
+      setpoint: targetTemp,
+      useSchedule,
+      schedule,
+      overrideMode,
+      overrideSetpoint,
+      cooling_fan: coolingFan,
+      humidifier
+    };
+
+    const sendAndRefresh = async () => {
+      try {
+        await fetch("/api/control", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        // Fetch updated state once after POST
+        const res = await fetch("/api/control");
+        const data = await res.json();
+
+        setMode(data.mode);
+        setTargetTemp(data.setpoint);
+        setUseSchedule(data.useSchedule);
+        setSchedule(data.schedule);
+        setOverrideMode(data.overrideMode);
+        setOverrideSetpoint(data.overrideSetpoint);
+
+        setCoolingFan(data.cooling_fan ?? 0);
+        setHumidifier(data.humidifier ?? false);
+        setHeaterStatus(data.heater ?? false);
+
+      } catch (err) {
+        console.error("Failed to update control state", err);
+      }
+    };
+
+    // Debounce to avoid spam
+    const id = setTimeout(sendAndRefresh, 150);
+    return () => clearTimeout(id);
+
+  }, [
+    mode,
+    targetTemp,
+    useSchedule,
+    schedule,
+    overrideMode,
+    overrideSetpoint,
+    coolingFan,
+    humidifier
+  ]);
+
+  // OLD POST POLLING
+  // useEffect(() => {
+  //   async function send() {
+  //     const payload = {
+  //       mode,
+  //       setpoint: targetTemp,
+  //       useSchedule,
+  //       schedule,
+  //       overrideMode,
+  //       overrideSetpoint,
+  //       cooling_fan: coolingFan,
+  //       humidifier
+  //     };
 
 
-      await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-    }
+  //     await fetch("/api/control", {
+  //       method: "POST",
+  //       headers: { "Content-Type": "application/json" },
+  //       body: JSON.stringify(payload),
+  //     });
+  //   }
 
-    send();
-  }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, coolingFan, humidifier]);
+  //   send();
+  // }, [mode, targetTemp, useSchedule, schedule, overrideMode, overrideSetpoint, coolingFan, humidifier]);
 
   // DIAL LOGIC
   const minTemp = 10;
