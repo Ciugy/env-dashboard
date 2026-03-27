@@ -95,6 +95,16 @@ def send_actuator_commands():
         state = res.json()
     except:
         return
+    
+
+    # If override mode is active, do NOT run automatic logic
+    if state.get("overrideMode"):
+        update_backend(
+            heater=state.get("heater", False),
+            humidifier=state.get("humidifier", False),
+            cooling_fan=state.get("cooling_fan", 0)
+        )
+        return
 
     mode = state.get("mode")
     setpoint = state.get("setpoint")
