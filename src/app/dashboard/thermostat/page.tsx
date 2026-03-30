@@ -30,7 +30,7 @@ type SensorData = {
 export default function ThermostatPage() {
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
   const last = sensorReadings.at(-1);
-  const currentTemp = last?.temp?.toFixed(1) ?? "--";
+  const lastTemp = last?.temp?.toFixed(1) ?? "--";
   // CONTROL STATE
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0);
@@ -413,7 +413,7 @@ export default function ThermostatPage() {
 
                   return (
                     <div className="mt-2 text-xs text-center opacity-80">
-                      <span className="font-medium">LastTemp:</span>{" "}
+                      <span className="font-medium">LastTemp:</span> {lastTemp}°C
                       {last.temp.toFixed(1)}°C
                       {prev && (
                         <span className="ml-2">
