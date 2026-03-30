@@ -281,8 +281,8 @@ export default function ThermostatPage() {
   const coolCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "HEAT") return false;
-    return Number(currentTemp) > effectiveSetpoint + hysteresis;
-  }, [mode, currentTemp, effectiveSetpoint]);
+    return Number(lastTemp) > effectiveSetpoint + hysteresis;
+  }, [mode, lastTemp, effectiveSetpoint]);
 
 
   return (
