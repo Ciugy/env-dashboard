@@ -156,7 +156,7 @@ export default function ThermostatPage() {
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "COOL") return false;
-    return Number(currentTemp) < effectiveSetpoint - hysteresis;
+    return Number(lastTemp) < effectiveSetpoint - hysteresis;
   }, [mode, lastTemp, effectiveSetpoint]);
 
 
