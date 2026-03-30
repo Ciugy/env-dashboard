@@ -413,7 +413,8 @@ export default function ThermostatPage() {
 
                   return (
                     <div className="mt-2 text-xs text-center opacity-80">
-                      <span className="font-medium">LastTemp:</span> {lastTemp}°C
+                      <span className="font-medium">LastTemp:</span>
+                      {lastTemp}°C
                       {prev && (
                         <span className="ml-2">
                           {last.temp > prev.temp ? (
