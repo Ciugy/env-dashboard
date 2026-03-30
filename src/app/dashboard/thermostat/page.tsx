@@ -157,7 +157,7 @@ export default function ThermostatPage() {
     if (mode === "OFF") return false;
     if (mode === "COOL") return false;
     return Number(currentTemp) < effectiveSetpoint - hysteresis;
-  }, [mode, currentTemp, effectiveSetpoint]);
+  }, [mode, lastTemp, effectiveSetpoint]);
 
 
   // SEND CONTROL STATE TO BACKEND
