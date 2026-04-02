@@ -5,10 +5,28 @@ import time
 from datetime import datetime
 import requests
 
-# RTC IMPORTS
-import board
-import busio
-import adafruit_ds3231
+# RTC IMPORTS (SMBus version — works on all Raspberry Pis)
+from smbus2 import SMBus
+
+RTC_ADDR = 0x68
+bus = SMBus(1)
+
+def bcd_to_dec(b):
+    return (b // 16) * 10 + (b % 16)
+
+def rtc_now():
+    """Read timestamp from DS3231 RTC using SMBus."""
+    data = bus.read_i2c_block_data(RTC_ADDR, 0x00, 7)
+
+    sec = bcd_to_dec(data[0] & 0x7F)
+    minute = bcd_to_dec(data[1])
+    hour = bcd_to_dec(data[2] & 0x3F)
+    day = bcd_to_dec(data[4])
+    month = bcd_to_dec(data[5] & 0x1F)
+    year = 2000 + bcd_to_dec(data[6])
+
+    return f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
+
 
 SERIAL_PORT = "/dev/ttyACM0"
 BAUD_RATE = 115200
@@ -20,31 +38,11 @@ POLL_INTERVAL = 1.0
 SENSOR_INTERVAL = 0.05
 
 
-# RTC SETUP
-i2c = busio.I2C(board.SCL, board.SDA)
-rtc = adafruit_ds3231.DS3231(i2c)
-
-def rtc_now():
-    """Return timestamp from DS3231 RTC in YYYY-MM-DD HH:MM:SS format."""
-    now = rtc.datetime
-    return (
-        f"{now.tm_year}-{now.tm_mon:02d}-{now.tm_mday:02d} "
-        f"{now.tm_hour:02d}:{now.tm_min:02d}:{now.tm_sec:02d}"
-    )
-
-
 # LIVE TERMINAL STATUS OUTPUT
 def print_status(override_text, actuator_text, sensor_text):
-    # Move cursor UP 3 lines
     print("\033[3F", end="")
-
-    # Clear and rewrite override line
     print("\r\033[K" + override_text)
-
-    # Clear and rewrite actuator line
     print("\r\033[K" + actuator_text)
-
-    # Clear and rewrite sensor line
     print("\r\033[K" + sensor_text)
 
 
@@ -79,12 +77,10 @@ latest_co2 = None
 
 
 # BACKEND UPDATE
-def update_backend(**kwargs):  # Turns arguments into a dictionary, python magic!, from StackOverflow
-    """Send only changed fields to backend."""
+def update_backend(**kwargs):
     payload = {k: v for k, v in kwargs.items() if v is not None}
     if not payload:
         return
-
     try:
         requests.post(CONTROL_URL, json=payload, timeout=1)
     except:
@@ -95,13 +91,10 @@ def update_backend(**kwargs):  # Turns arguments into a dictionary, python magic
 def handle_override_command(cmd):
     if cmd == "H":
         update_backend(heater=True)
-
     elif cmd == "h":
         update_backend(heater=False)
-
     elif cmd == "F":
         update_backend(cooling_fan=100)
-
     elif cmd == "f":
         update_backend(cooling_fan=0)
 
@@ -127,7 +120,6 @@ def send_actuator_commands():
     current_hum = latest_hum
     lag = 0.3
 
-    # Build sensor line in the terminal
     sensor_text = (
         f"Temp: {latest_temp:.1f}C | "
         f"Hum: {latest_hum:.0f}% | "
@@ -135,7 +127,6 @@ def send_actuator_commands():
         f"Press: {latest_press:.0f}hPa"
     )
 
-    # FULL OVERRIDE MODE
     if state.get("overrideMode"):
         override_sp = state.get("overrideSetpoint", setpoint)
 
@@ -161,7 +152,6 @@ def send_actuator_commands():
         print_status(override_text, actuator_text, sensor_text)
         return
 
-    # APPLY OVERRIDE SETPOINT
     if state.get("overrideSetpoint") is not None:
         setpoint = state["overrideSetpoint"]
 
@@ -169,16 +159,13 @@ def send_actuator_commands():
     fan_pwm = state.get("cooling_fan", 0)
     humidifier_on = state.get("humidifier", False)
 
-    # OFF MODE
     if mode == "OFF":
         update_backend(mode="OFF", heater=False, humidifier=False, cooling_fan=0)
-
         override_text = f"Override: {state.get('overrideMode')} (Setpoint: {state.get('overrideSetpoint')})"
         actuator_text = "Heater: False | Fan: 0% | Humidifier: False"
         print_status(override_text, actuator_text, sensor_text)
         return
 
-    # HEAT MODE
     if mode == "HEAT":
         heater_on = current_temp < setpoint - lag
         humidifier_on = current_hum < 15 or (humidifier_on and current_hum < 25)
@@ -195,7 +182,6 @@ def send_actuator_commands():
         print_status(override_text, actuator_text, sensor_text)
         return
 
-    # COOL MODE
     if mode == "COOL":
         update_backend(
             mode="COOL",
@@ -209,7 +195,6 @@ def send_actuator_commands():
         print_status(override_text, actuator_text, sensor_text)
         return
 
-    # AUTO MODE
     if mode == "AUTO":
         diff = current_temp - setpoint
 
@@ -237,9 +222,8 @@ def send_actuator_commands():
         return
 
 
-# MAIN LOOP
 print("Listening for sensor data...")
-print("\n\n\n\n")  # reserve four lines in the terminal
+print("\n\n\n\n")
 
 last_actuator_poll = time.time()
 
@@ -251,12 +235,10 @@ while True:
         time.sleep(1)
         continue
 
-    # HANDLE ACTUATOR COMMANDS
     if line in ["H", "h", "F", "f"]:
         handle_override_command(line)
         continue
 
-    # HANDLE SENSOR JSON
     if line:
         try:
             data = json.loads(line)
@@ -264,8 +246,7 @@ while True:
             data = None
 
         if data:
-            # USE RTC TIMESTAMP
-            ts = rtc_now()
+            ts = rtc_now()  # <-- RTC timestamp here
 
             latest_temp = data.get("bme_temp", latest_temp)
             latest_press = data.get("bme_press", latest_press)
@@ -290,7 +271,6 @@ while True:
 
             print("Data:", ts, data)
 
-    # PERIODIC ACTUATOR LOGIC
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()
