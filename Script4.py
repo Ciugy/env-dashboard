@@ -221,7 +221,7 @@ def send_actuator_commands():
 
 # MAIN LOOP
 print("Listening for sensor data...")
-print("\n\n\n")  # reserve three lines for live status
+print("\n\n\n\n")  # reserve four lines in the terminal
 
 last_actuator_poll = time.time()
 
