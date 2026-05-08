@@ -103,9 +103,11 @@ def handle_override_command(cmd):
 def send_actuator_commands():
     global latest_temp, latest_hum
 
+    # SENSOR VALIDATION 
     if latest_temp is None or latest_hum is None:
         return
 
+    # GET BACKEND STATE 
     try:
         state = requests.get(CONTROL_URL, timeout=1).json()
     except:
@@ -113,13 +115,17 @@ def send_actuator_commands():
 
     mode = state.get("mode")
     setpoint = state.get("setpoint")
-    if setpoint is None:
-        return
+    override_mode = state.get("overrideMode", False)
+    override_sp = state.get("overrideSetpoint")
+    heater_on = state.get("heater", False)
+    fan_pwm = state.get("cooling_fan", 0)
+    humidifier_on = state.get("humidifier", False)
 
     current_temp = latest_temp
     current_hum = latest_hum
     lag = 0.3
 
+    #TERMINAL SENSOR TEXT
     sensor_text = (
         f"Temp: {latest_temp:.1f}C | "
         f"Hum: {latest_hum:.0f}% | "
@@ -127,45 +133,55 @@ def send_actuator_commands():
         f"Press: {latest_press:.0f}hPa"
     )
 
-    if state.get("overrideMode"):
-        override_sp = state.get("overrideSetpoint", setpoint)
+    # OVERRIDE MODE (PHYSICAL BUTTONS)
+    if override_mode:
+        sp = override_sp if override_sp is not None else setpoint
 
-        if override_sp is not None:
-            if current_temp > override_sp + lag:
+        if sp is not None:
+            if current_temp > sp + lag:
                 mode = "COOL"
-            elif current_temp < override_sp - lag:
+            elif current_temp < sp - lag:
                 mode = "HEAT"
             else:
                 mode = "OFF"
 
         update_backend(
             mode=mode,
-            heater=state.get("heater"),
-            humidifier=state.get("humidifier"),
-            cooling_fan=state.get("cooling_fan"),
-            overrideSetpoint=override_sp,
-            overrideMode=True
+            heater=heater_on,
+            cooling_fan=fan_pwm,
+            humidifier=humidifier_on,
+            overrideMode=True,
+            overrideSetpoint=sp
         )
 
-        override_text = f"Override: True (Setpoint: {override_sp})"
-        actuator_text = f"Heater: {state.get('heater')} | Fan: {state.get('cooling_fan')}% | Humidifier: {state.get('humidifier')}"
+        override_text = f"Override: True (Setpoint: {sp})"
+        actuator_text = f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}"
         print_status(override_text, actuator_text, sensor_text)
         return
 
-    if state.get("overrideSetpoint") is not None:
-        setpoint = state["overrideSetpoint"]
+    # NORMAL MODE — OVERRIDE SETPOINT TAKES PRIORITY
+    if override_sp is not None:
+        setpoint = override_sp
 
-    heater_on = state.get("heater", False)
-    fan_pwm = state.get("cooling_fan", 0)
-    humidifier_on = state.get("humidifier", False)
+    if setpoint is None:
+        return
 
+
+    # OFF MODE — AUTO TRIGGER
     if mode == "OFF":
-        update_backend(mode="OFF", heater=False, humidifier=False, cooling_fan=0)
-        override_text = f"Override: {state.get('overrideMode')} (Setpoint: {state.get('overrideSetpoint')})"
-        actuator_text = "Heater: False | Fan: 0% | Humidifier: False"
-        print_status(override_text, actuator_text, sensor_text)
-        return
+        if current_temp < setpoint - lag:
+            mode = "HEAT"
+        elif current_temp > setpoint + lag:
+            mode = "COOL"
+        else:
+            # Stay OFF
+            update_backend(mode="OFF", heater=False, cooling_fan=0, humidifier=False)
+            override_text = f"Override: False (Setpoint: {setpoint})"
+            actuator_text = "Heater: False | Fan: 0% | Humidifier: False"
+            print_status(override_text, actuator_text, sensor_text)
+            return
 
+    #  HEAT MODE
     if mode == "HEAT":
         heater_on = current_temp < setpoint - lag
         humidifier_on = current_hum < 15 or (humidifier_on and current_hum < 25)
@@ -173,34 +189,38 @@ def send_actuator_commands():
         update_backend(
             mode="HEAT",
             heater=heater_on,
-            humidifier=humidifier_on,
-            cooling_fan=fan_pwm
+            cooling_fan=fan_pwm,
+            humidifier=humidifier_on
         )
 
-        override_text = f"Override: {state.get('overrideMode')} (Setpoint: {state.get('overrideSetpoint')})"
+        override_text = f"Override: False (Setpoint: {setpoint})"
         actuator_text = f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}"
         print_status(override_text, actuator_text, sensor_text)
         return
 
+    # COOL MODE
     if mode == "COOL":
+        heater_on = False
         update_backend(
             mode="COOL",
             heater=False,
-            humidifier=humidifier_on,
-            cooling_fan=fan_pwm
+            cooling_fan=fan_pwm,
+            humidifier=humidifier_on
         )
 
-        override_text = f"Override: {state.get('overrideMode')} (Setpoint: {state.get('overrideSetpoint')})"
+        override_text = f"Override: False (Setpoint: {setpoint})"
         actuator_text = f"Heater: False | Fan: {fan_pwm}% | Humidifier: {humidifier_on}"
         print_status(override_text, actuator_text, sensor_text)
         return
 
+
+    # AUTO MODE
     if mode == "AUTO":
         diff = current_temp - setpoint
 
         if diff > 0.5:
-            fan_pwm = min(max(int((diff / 3.0) * 100), 20), 100)
             heater_on = False
+            fan_pwm = min(max(int((diff / 3.0) * 100), 20), 100)
         elif diff < -0.5:
             heater_on = True
             fan_pwm = 30
@@ -212,14 +232,15 @@ def send_actuator_commands():
         update_backend(
             mode="AUTO",
             heater=heater_on,
-            humidifier=humidifier_on,
-            cooling_fan=fan_pwm
+            cooling_fan=fan_pwm,
+            humidifier=humidifier_on
         )
 
-        override_text = f"Override: {state.get('overrideMode')} (Setpoint: {state.get('overrideSetpoint')})"
+        override_text = f"Override: False (Setpoint: {setpoint})"
         actuator_text = f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}"
         print_status(override_text, actuator_text, sensor_text)
         return
+
 
 
 print("Listening for sensor data...")
@@ -246,7 +267,7 @@ while True:
             data = None
 
         if data:
-            ts = rtc_now()  # <-- RTC timestamp here
+            ts = rtc_now()
 
             latest_temp = data.get("bme_temp", latest_temp)
             latest_press = data.get("bme_press", latest_press)
@@ -276,3 +297,7 @@ while True:
         last_actuator_poll = time.time()
 
     time.sleep(SENSOR_INTERVAL)
+    
+    
+    
+
