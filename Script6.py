@@ -2,82 +2,121 @@ import json
 import sqlite3
 import serial
 import time
-from datetime import datetime
-import requests
 from smbus2 import SMBus
+import requests
 
-# RTC
+# ─── RTC ─────────────────────────────────────────────────────────────────────
+
 RTC_ADDR = 0x68
 bus = SMBus(1)
 
-def bcd_to_dec(b):
+def bcd_to_dec(b: int) -> int:
     return (b // 16) * 10 + (b % 16)
 
-def rtc_now():
+def rtc_now() -> str:
     data = bus.read_i2c_block_data(RTC_ADDR, 0x00, 7)
-    sec = bcd_to_dec(data[0] & 0x7F)
+    sec   = bcd_to_dec(data[0] & 0x7F)
     minute = bcd_to_dec(data[1])
-    hour = bcd_to_dec(data[2] & 0x3F)
-    day = bcd_to_dec(data[4])
+    hour  = bcd_to_dec(data[2] & 0x3F)
+    day   = bcd_to_dec(data[4])
     month = bcd_to_dec(data[5] & 0x1F)
-    year = 2000 + bcd_to_dec(data[6])
+    year  = 2000 + bcd_to_dec(data[6])
     return f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
 
-SERIAL_PORT = "/dev/ttyACM0"
-BAUD_RATE = 115200
+# ─── Config ───────────────────────────────────────────────────────────────────
 
-CONTROL_URL = "http://localhost:3000/api/control"
-DB_PATH = "./src/app/api/data/sensor_data.db"
+SERIAL_PORT    = "/dev/ttyACM0"
+BAUD_RATE      = 115200
+CONTROL_URL    = "http://localhost:3000/api/control"
+DB_PATH        = "./src/app/api/data/sensor_data.db"
+POLL_INTERVAL  = 1.0   # seconds between actuator polls
+SENSOR_INTERVAL = 0.05  # seconds between serial reads
 
-POLL_INTERVAL = 1.0
-SENSOR_INTERVAL = 0.05
+# Deadband / hysteresis — must move this far past setpoint before switching
+HYSTERESIS = 0.5  # °C
 
-# LIVE TERMINAL OUTPUT
-def print_status(override_text, actuator_text, sensor_text):
-    print("\033[3F", end="")
-    print("\r\033[K" + override_text)
-    print("\r\033[K" + actuator_text)
-    print("\r\033[K" + sensor_text)
+# ─── Database ─────────────────────────────────────────────────────────────────
 
-# DB
-conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
-
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS sensor_data (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    timestamp TEXT NOT NULL,
-    bme_temp REAL,
-    bme_press REAL,
-    bme_gas REAL,
-    scd_co2 INTEGER,
-    scd_hum REAL
-)
+    CREATE TABLE IF NOT EXISTS sensor_data (
+        id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        timestamp  TEXT    NOT NULL,
+        bme_temp   REAL,
+        bme_press  REAL,
+        bme_gas    REAL,
+        scd_co2    INTEGER,
+        scd_hum    REAL
+    )
 """)
 conn.commit()
 
-# SERIAL
+# ─── Serial ───────────────────────────────────────────────────────────────────
+
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
-# Latest sensor values
-latest_temp = None
-latest_hum = None
-latest_press = None
-latest_gas = None
-latest_co2 = None
+# ─── Latest sensor values ─────────────────────────────────────────────────────
 
-def update_backend(**kwargs):
+latest_temp:  float | None = None
+latest_hum:   float | None = None
+latest_press: float | None = None
+latest_gas:   float | None = None
+latest_co2:   int   | None = None
+
+# ─── Helpers ──────────────────────────────────────────────────────────────────
+
+def update_backend(**kwargs) -> None:
+    """PATCH only the keys that are provided."""
     payload = {k: v for k, v in kwargs.items() if v is not None}
     if not payload:
         return
     try:
         requests.post(CONTROL_URL, json=payload, timeout=1)
-    except:
+    except Exception:
         pass
 
-def handle_override_command(cmd):
+
+def all_off() -> None:
+    """Force every actuator off and do NOT touch mode/override flags."""
+    update_backend(heater=False, cooling_fan=0, humidifier=False)
+
+
+def compute_actuators(current_temp: float, current_hum: float, setpoint: float):
+    """
+    Apply hysteresis and return (heater_on, fan_pwm, humidifier_on).
+    Never call this when mode is OFF.
+    """
+    heater_on    = current_temp < setpoint - HYSTERESIS
+    fan_pwm      = 100 if current_temp > setpoint + HYSTERESIS else 0
+    # Heater and fan are mutually exclusive
+    if heater_on:
+        fan_pwm = 0
+
+    humidifier_on = current_hum < 15
+    return heater_on, fan_pwm, humidifier_on
+
+
+def print_status(override_text: str, actuator_text: str, sensor_text: str) -> None:
+    print("\033[3F", end="")
+    print("\r\033[K" + override_text)
+    print("\r\033[K" + actuator_text)
+    print("\r\033[K" + sensor_text)
+
+
+def format_sensor_text() -> str:
+    return (
+        f"Temp: {latest_temp:.1f}°C | "
+        f"Hum: {latest_hum:.0f}% | "
+        f"CO2: {latest_co2} ppm | "
+        f"Press: {latest_press:.0f} hPa"
+    )
+
+
+def handle_serial_override(cmd: str) -> None:
+    """Handle single-char commands that come straight from the ESP32."""
     if cmd == "H":
         update_backend(heater=True)
     elif cmd == "h":
@@ -87,163 +126,108 @@ def handle_override_command(cmd):
     elif cmd == "f":
         update_backend(cooling_fan=0)
 
-def send_actuator_commands():
-    global latest_temp, latest_hum
+# ─── Main control loop ────────────────────────────────────────────────────────
 
+def send_actuator_commands() -> None:
+    """
+    Fetch control state once, decide what the actuators should do,
+    push only the actuator fields back — never touch mode/overrideMode.
+    """
     if latest_temp is None or latest_hum is None:
         return
 
     try:
         state = requests.get(CONTROL_URL, timeout=1).json()
-    except:
+    except Exception:
         return
 
-    mode = state.get("mode")
-    setpoint = state.get("setpoint")
+    mode          = state.get("mode", "OFF")
+    setpoint      = state.get("setpoint")
     override_mode = state.get("overrideMode", False)
-    override_sp = state.get("overrideSetpoint")
-    heater_on = state.get("heater", False)
-    fan_pwm = state.get("cooling_fan", 0)
-    humidifier_on = state.get("humidifier", False)
+    override_sp   = state.get("overrideSetpoint")
 
-    current_temp = latest_temp
-    current_hum = latest_hum
+    sensor_text = format_sensor_text()
 
-    sensor_text = (
-        f"Temp: {latest_temp:.1f}C | "
-        f"Hum: {latest_hum:.0f}% | "
-        f"CO2: {latest_co2}ppm | "
-        f"Press: {latest_press:.0f}hPa"
-    )
+    # ── 1. System is OFF — hard lock, nothing runs ────────────────────────────
+    if mode == "OFF":
+        all_off()
+        print_status(
+            "Mode: OFF",
+            "Heater: OFF | Fan: 0% | Humidifier: OFF",
+            sensor_text,
+        )
+        return
 
-    # ------------------------------
-    # OVERRIDE MODE
-    # ------------------------------
+    # ── 2. Override mode — use override setpoint, keep user mode intact ───────
+    #
+    # BUG FIX: we do NOT call update_backend(mode=...) here, which was
+    # previously corrupting the user's chosen mode on the frontend.
     if override_mode:
-
-        # Wait for override setpoint
         if override_sp is None:
-            update_backend(
-                mode="OFF",
-                heater=False,
-                cooling_fan=0,
-                humidifier=False,
-                overrideMode=True
-            )
+            # Override enabled but no setpoint yet — safe fallback
+            all_off()
             print_status(
-                "Override: Waiting for setpoint...",
-                "Heater: False | Fan: 0% | Humidifier: False",
-                sensor_text
+                "Override: waiting for setpoint…",
+                "Heater: OFF | Fan: 0% | Humidifier: OFF",
+                sensor_text,
             )
             return
 
-        sp = override_sp
-
-        # DIRECT SWITCHING
-        if current_temp > sp:
-            mode = "COOL"
-        elif current_temp < sp:
-            mode = "HEAT"
-        else:
-            mode = "OFF"
-
-        # Apply logic
-        if mode == "COOL":
-            heater_on = False
-            fan_pwm = 100
-        elif mode == "HEAT":
-            heater_on = True
-            fan_pwm = 0
-        else:
-            heater_on = False
-            fan_pwm = 0
-
-        # Humidifier 
-        humidifier_on = current_hum < 15
-
+        heater_on, fan_pwm, humidifier_on = compute_actuators(
+            latest_temp, latest_hum, override_sp
+        )
         update_backend(
-            mode=mode,
             heater=heater_on,
             cooling_fan=fan_pwm,
             humidifier=humidifier_on,
-            overrideMode=True,
-            overrideSetpoint=sp
+            # Deliberately NOT sending mode/overrideMode — they stay as-is
         )
-
         print_status(
-            f"Override: True (Setpoint: {sp})",
+            f"Override: ON (setpoint: {override_sp}°C)",
             f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}",
-            sensor_text
+            sensor_text,
         )
         return
 
-    # ------------------------------
-    # HARD OFF MODE LOCK
-    # ------------------------------
-    if mode == "OFF":
-        update_backend(
-            mode="OFF",
-            heater=False,
-            cooling_fan=0,
-            humidifier=False
-        )
-        print_status(
-            f"Override: False (Setpoint: {setpoint})",
-            "Heater: False | Fan: 0% | Humidifier: False",
-            sensor_text
-        )
-        return
-
-    # ------------------------------
-    # NORMAL MODE
-    # ------------------------------
-    if override_sp is not None:
-        setpoint = override_sp
-
+    # ── 3. Normal mode ────────────────────────────────────────────────────────
+    #
+    # BUG FIX: we only use override_sp when overrideMode is True (handled
+    # above). Here we always use the regular setpoint.
     if setpoint is None:
         return
 
-    # DIRECT SWITCHING
-    if current_temp > setpoint:
-        mode = "COOL"
-    elif current_temp < setpoint:
-        mode = "HEAT"
-    else:
-        mode = "OFF"
+    heater_on, fan_pwm, humidifier_on = compute_actuators(
+        latest_temp, latest_hum, setpoint
+    )
 
-    # Apply logic
-    if mode == "COOL":
-        heater_on = False
-        fan_pwm = 100
-    elif mode == "HEAT":
-        heater_on = True
-        fan_pwm = 0
-    else:
-        heater_on = False
-        fan_pwm = 0
-
-    # Humidifier 
-    humidifier_on = current_hum < 15
+    # Respect the user's chosen mode direction
+    if mode == "HEAT":
+        fan_pwm = 0          # never cool in heat-only mode
+    elif mode == "COOL":
+        heater_on = False    # never heat in cool-only mode
 
     update_backend(
-        mode=mode,
         heater=heater_on,
         cooling_fan=fan_pwm,
-        humidifier=humidifier_on
+        humidifier=humidifier_on,
+        # Deliberately NOT sending mode — leave it alone
     )
-
     print_status(
-        f"Override: False (Setpoint: {setpoint})",
+        f"Mode: {mode} (setpoint: {setpoint}°C)",
         f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}",
-        sensor_text
+        sensor_text,
     )
 
-print("Listening for sensor data...")
+
+# ─── Entry point ──────────────────────────────────────────────────────────────
+
+print("Listening for sensor data…")
 print("\n\n\n\n")
 
 last_actuator_poll = time.time()
 
 while True:
+    # Read one line from serial
     try:
         line = ser.readline().decode(errors="ignore").strip()
     except Exception as e:
@@ -251,42 +235,42 @@ while True:
         time.sleep(1)
         continue
 
-    if line in ["H", "h", "F", "f"]:
-        handle_override_command(line)
+    # Single-char ESP32 override commands
+    if line in ("H", "h", "F", "f"):
+        handle_serial_override(line)
         continue
 
+    # JSON sensor payload
     if line:
         try:
             data = json.loads(line)
-        except:
+        except json.JSONDecodeError:
             data = None
 
         if data:
             ts = rtc_now()
 
-            latest_temp = data.get("bme_temp", latest_temp)
+            latest_temp  = data.get("bme_temp",  latest_temp)
             latest_press = data.get("bme_press", latest_press)
-            latest_gas = data.get("bme_gas", latest_gas)
-            latest_co2 = data.get("scd_co2", latest_co2)
-            latest_hum = data.get("scd_hum", latest_hum)
+            latest_gas   = data.get("bme_gas",   latest_gas)
+            latest_co2   = data.get("scd_co2",   latest_co2)
+            latest_hum   = data.get("scd_hum",   latest_hum)
 
             cursor.execute("""
-                INSERT INTO sensor_data (
-                    timestamp, bme_temp, bme_press, bme_gas,
-                    scd_co2, scd_hum
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                INSERT INTO sensor_data
+                    (timestamp, bme_temp, bme_press, bme_gas, scd_co2, scd_hum)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 ts,
                 data.get("bme_temp"),
                 data.get("bme_press"),
                 data.get("bme_gas"),
                 data.get("scd_co2"),
-                data.get("scd_hum")
+                data.get("scd_hum"),
             ))
             conn.commit()
 
-            print("Data:", ts, data)
-
+    # Actuator poll
     if time.time() - last_actuator_poll >= POLL_INTERVAL:
         send_actuator_commands()
         last_actuator_poll = time.time()
