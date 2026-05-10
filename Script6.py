@@ -201,6 +201,12 @@ def send_actuator_commands():
     # COOL MODE
     if mode == "COOL":
         heater_on = False
+
+        if current_temp > setpoint + lag:
+            fan_pwm = 100
+        elif current_temp < setpoint - lag:
+            fan_pwm = 0
+
         update_backend(
             mode="COOL",
             heater=False,
