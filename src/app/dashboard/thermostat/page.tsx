@@ -311,15 +311,21 @@ export default function ThermostatPage() {
 
   return (
     <div className="mx-auto max-w-6xl p-4 md:p-8">
+      {/* OVERRIDE BANNER */}
+      {overrideMode && overrideSetpoint != null && (
+        <div className="mb-6 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 text-center">
+          <div className="text-lg font-semibold text-amber-400">
+            Override Mode Active
+          </div>
+          <div className="mt-1 text-sm opacity-80">
+            Target Temperature: {overrideSetpoint}°C
+          </div>
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-4">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Thermostat</h1>
-
-          {overrideMode && (
-            <div className="mt-2 text-sm text-amber-400">
-              Physical Override Active — Setpoint {overrideSetpoint}°C
-            </div>
-          )}
 
           <p className="mt-1 text-sm opacity-70">
             Schedule → Setpoint → Compare to sensor → Heater + Fan + Humidifier
@@ -363,7 +369,11 @@ export default function ThermostatPage() {
         <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/40 p-6">
           <div className="flex items-center justify-between">
             <div className="text-sm opacity-70">
-              {useSchedule ? "Scheduled setpoint" : "Manual setpoint"}
+              {overrideMode
+                ? "Override setpoint"
+                : useSchedule
+                  ? "Scheduled setpoint"
+                  : "Manual setpoint"}
             </div>
             <button
               onClick={() => sendControlPatch({ useSchedule: !useSchedule })}
