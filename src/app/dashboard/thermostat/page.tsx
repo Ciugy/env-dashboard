@@ -27,10 +27,40 @@ type SensorData = {
   timestamp?: string;
 };
 
+type ScheduleItem = {
+  id: string;
+  at: number;
+  temp: number;
+};
+
+type ControlPatch = Partial<{
+  mode: Mode;
+  setpoint: number;
+  useSchedule: boolean;
+  schedule: { at: number; temp: number }[];
+  overrideMode: boolean;
+  overrideSetpoint: number | null;
+  humidifier: boolean;
+  cooling_fan: number;
+  heater: boolean;
+}>;
+
+function createScheduleItem(at: number, temp: number): ScheduleItem {
+  return {
+    id: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`,
+    at,
+    temp,
+  };
+}
+
 export default function ThermostatPage() {
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
   const last = sensorReadings.at(-1);
-  const lastTemp = last?.temp?.toFixed(1) ?? "--";
+  const lastTempNumber = last?.temp ?? NaN;
+  const lastTemp = Number.isFinite(lastTempNumber) ? lastTempNumber.toFixed(1) : "--";
+
   // CONTROL STATE
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0);
@@ -44,9 +74,10 @@ export default function ThermostatPage() {
   const [humidifier, setHumidifier] = useState(false);
   const [heaterStatus, setHeaterStatus] = useState(false);
 
-  const [schedule, setSchedule] = useState([
-    { at: 6 * 60, temp: 22.0 },
+  const [schedule, setSchedule] = useState<ScheduleItem[]>([
+    createScheduleItem(6 * 60, 22.0),
   ]);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   // LOAD SENSOR DATA
   useEffect(() => {
@@ -76,29 +107,68 @@ export default function ThermostatPage() {
     return () => clearInterval(interval);
   }, []);
 
-  // CONTROL STATE FROM BACKEND, only loads once the page loads
-  useEffect(() => {
-    async function loadControl() {
-      try {
-        const res = await fetch("/api/control");
-        const data = await res.json();
+  async function syncControlState() {
+    try {
+      const res = await fetch("/api/control");
+      const data = await res.json();
 
-        setMode(data.mode);
-        setTargetTemp(data.setpoint);
-        setUseSchedule(data.useSchedule);
-        setSchedule(data.schedule);
-        setOverrideMode(data.overrideMode);
-        setOverrideSetpoint(data.overrideSetpoint);
+      setMode(data.mode);
+      setTargetTemp(data.setpoint);
+      setUseSchedule(data.useSchedule);
+      setSchedule(
+        Array.isArray(data.schedule)
+          ? data.schedule.map((item: any) =>
+              createScheduleItem(item.at ?? 0, item.temp ?? 0)
+            )
+          : []
+      );
+      setOverrideMode(data.overrideMode);
+      setOverrideSetpoint(data.overrideSetpoint);
 
-        setCoolingFan(data.cooling_fan ?? 0);
-        setHumidifier(data.humidifier ?? false);
-        setHeaterStatus(data.heater ?? false);
-
-      } catch (err) {
-        console.error("Failed to load control state", err);
-      }
+      setCoolingFan(data.cooling_fan ?? 0);
+      setHumidifier(data.humidifier ?? false);
+      setHeaterStatus(data.heater ?? false);
+    } catch (err) {
+      console.error("Failed to sync control state", err);
     }
-    loadControl();
+  }
+
+  async function sendControlPatch(patch: ControlPatch) {
+    setIsSyncing(true);
+    try {
+      const res = await fetch("/api/control", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      const data = await res.json();
+      setMode(data.mode);
+      setTargetTemp(data.setpoint);
+      setUseSchedule(data.useSchedule);
+      setSchedule(
+        Array.isArray(data.schedule)
+          ? data.schedule.map((item: any) =>
+              createScheduleItem(item.at ?? 0, item.temp ?? 0)
+            )
+          : []
+      );
+      setOverrideMode(data.overrideMode);
+      setOverrideSetpoint(data.overrideSetpoint);
+
+      setCoolingFan(data.cooling_fan ?? 0);
+      setHumidifier(data.humidifier ?? false);
+      setHeaterStatus(data.heater ?? false);
+    } catch (err) {
+      console.error("Failed to update control state", err);
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
+  useEffect(() => {
+    syncControlState();
+    const interval = setInterval(syncControlState, 10000);
+    return () => clearInterval(interval);
   }, []);
 
 
@@ -156,65 +226,8 @@ export default function ThermostatPage() {
   const heatCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "COOL") return false;
-    return Number(lastTemp) < effectiveSetpoint - hysteresis;
-  }, [mode, lastTemp, effectiveSetpoint]);
-
-
-  // SEND CONTROL STATE TO BACKEND
-    useEffect(() => {
-    const payload = {
-      mode,
-      setpoint: targetTemp,
-      useSchedule,
-      schedule,
-      overrideMode,
-      overrideSetpoint,
-      cooling_fan: coolingFan,
-      humidifier
-    };
-
-    const sendAndRefresh = async () => {
-      try {
-        await fetch("/api/control", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
-
-        // Fetch updated state once after POST
-        const res = await fetch("/api/control");
-        const data = await res.json();
-
-        setMode(data.mode);
-        setTargetTemp(data.setpoint);
-        setUseSchedule(data.useSchedule);
-        setSchedule(data.schedule);
-        setOverrideMode(data.overrideMode);
-        setOverrideSetpoint(data.overrideSetpoint);
-
-        setCoolingFan(data.cooling_fan ?? 0);
-        setHumidifier(data.humidifier ?? false);
-        setHeaterStatus(data.heater ?? false);
-
-      } catch (err) {
-        console.error("Failed to update control state", err);
-      }
-    };
-
-    // Debounce to avoid spam
-    const id = setTimeout(sendAndRefresh, 150);
-    return () => clearTimeout(id);
-
-  }, [
-    mode,
-    targetTemp,
-    useSchedule,
-    schedule,
-    overrideMode,
-    overrideSetpoint,
-    coolingFan,
-    humidifier
-  ]);
+    return lastTempNumber < effectiveSetpoint - hysteresis;
+  }, [mode, lastTempNumber, effectiveSetpoint]);
 
   // OLD POST POLLING
   // useEffect(() => {
@@ -281,8 +294,8 @@ export default function ThermostatPage() {
   const coolCall = useMemo(() => {
     if (mode === "OFF") return false;
     if (mode === "HEAT") return false;
-    return Number(lastTemp) > effectiveSetpoint + hysteresis;
-  }, [mode, lastTemp, effectiveSetpoint]);
+    return lastTempNumber > effectiveSetpoint + hysteresis;
+  }, [mode, lastTempNumber, effectiveSetpoint]);
 
 
   return (
@@ -306,28 +319,28 @@ export default function ThermostatPage() {
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "HEAT" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => {setMode("HEAT"); setHeaterStatus(true) ; setCoolingFan(0)} }
+            onClick={() => sendControlPatch({ mode: "HEAT" })}
           >
             Heat
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "COOL" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => { setMode("COOL"); setCoolingFan(25); setHeaterStatus(false) }} // Sets the fan speed to a low setting, unless the user changes it with the slider
+            onClick={() => sendControlPatch({ mode: "COOL" })}
           >
             Cool
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "AUTO" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => setMode("AUTO")}
+            onClick={() => sendControlPatch({ mode: "AUTO" })}
           >
             Auto
           </button>
           <button
             className={`rounded-full px-3 py-1 text-sm border ${mode === "OFF" ? "bg-white/10" : "bg-transparent"
               }`}
-            onClick={() => {setMode("OFF"); setCoolingFan(0)}}
+            onClick={() => sendControlPatch({ mode: "OFF" })}
           >
             Off
           </button>
@@ -342,7 +355,7 @@ export default function ThermostatPage() {
               {useSchedule ? "Scheduled setpoint" : "Manual setpoint"}
             </div>
             <button
-              onClick={() => setUseSchedule((v) => !v)}
+              onClick={() => sendControlPatch({ useSchedule: !useSchedule })}
               className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
             >
               {useSchedule ? "Using Schedule" : "Using Manual"}
@@ -359,7 +372,10 @@ export default function ThermostatPage() {
                 handleDialPointer(e);
               }}
               onPointerMove={(e) => dragging && handleDialPointer(e)}
-              onPointerUp={() => setDragging(false)}
+              onPointerUp={() => {
+                setDragging(false);
+                sendControlPatch({ setpoint: targetTemp, useSchedule: false });
+              }}
             >
               <svg className="absolute inset-0" viewBox="0 0 200 200">
                 <circle
@@ -453,8 +469,8 @@ export default function ThermostatPage() {
                   <button
                     className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
                     onClick={() => {
-                      setUseSchedule(false);
-                      setTargetTemp((t) => clamp(t - 0.5, minTemp, maxTemp));
+                      const newSetpoint = clamp(targetTemp - 0.5, minTemp, maxTemp);
+                      sendControlPatch({ setpoint: newSetpoint, useSchedule: false });
                     }}
                   >
                     −
@@ -463,8 +479,8 @@ export default function ThermostatPage() {
                   <button
                     className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
                     onClick={() => {
-                      setUseSchedule(false);
-                      setTargetTemp((t) => clamp(t + 0.5, minTemp, maxTemp));
+                      const newSetpoint = clamp(targetTemp + 0.5, minTemp, maxTemp);
+                      sendControlPatch({ setpoint: newSetpoint, useSchedule: false });
                     }}
                   >
                     +
@@ -511,7 +527,7 @@ export default function ThermostatPage() {
                 min={0}
                 max={100}
                 value={coolingFan}
-                onChange={(e) => setCoolingFan(Number(e.target.value))}
+                onChange={(e) => sendControlPatch({ cooling_fan: Number(e.target.value) })}
                 className="w-full mt-3"
               />
               <div className="mt-2 text-sm opacity-80">
@@ -523,7 +539,7 @@ export default function ThermostatPage() {
             <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
               <div className="text-sm opacity-60">Humidifier</div>
               <button
-                onClick={() => setHumidifier((v) => !v)}
+                onClick={() => sendControlPatch({ humidifier: !humidifier })}
                 className={`mt-3 px-4 py-2 rounded-lg text-sm ${humidifier
                     ? "bg-emerald-600 text-white"
                     : "bg-zinc-800 text-zinc-300"
@@ -571,9 +587,15 @@ export default function ThermostatPage() {
               </div>
             </div>
             <button
-              onClick={() =>
-                setSchedule((s) => [...s, { at: 12 * 60, temp: 21.0 }].sort((a, b) => a.at - b.at))
-              }
+              onClick={() => {
+                const nextSchedule = [...schedule, createScheduleItem(12 * 60, 21.0)].sort(
+                  (a, b) => a.at - b.at
+                );
+                setSchedule(nextSchedule);
+                sendControlPatch({
+                  schedule: nextSchedule.map(({ at, temp }) => ({ at, temp })),
+                });
+              }}
               className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
             >
               + Add
@@ -584,9 +606,9 @@ export default function ThermostatPage() {
             {schedule
               .slice()
               .sort((a, b) => a.at - b.at)
-              .map((item, idx) => (
+              .map((item) => (
                 <div
-                  key={`${item.at}-${idx}`}
+                  key={item.id}
                   className="grid gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3 md:grid-cols-[96px_1fr_72px_96px_auto]"
                 >
                   <div className="flex items-center gap-3">
@@ -602,10 +624,12 @@ export default function ThermostatPage() {
                         value={item.temp}
                         onChange={(e) => {
                           const v = Number(e.target.value);
-                          setSchedule((s) => {
-                            const copy = [...s];
-                            copy[idx] = { ...copy[idx], temp: v };
-                            return copy;
+                          const nextSchedule = schedule.map((entry) =>
+                            entry.id === item.id ? { ...entry, temp: v } : entry
+                          );
+                          setSchedule(nextSchedule);
+                          sendControlPatch({
+                            schedule: nextSchedule.map(({ at, temp }) => ({ at, temp })),
                           });
                         }}
                         className="w-full"
@@ -623,16 +647,26 @@ export default function ThermostatPage() {
                       onChange={(e) => {
                         const [hh, mm] = e.target.value.split(":").map(Number);
                         const at = hh * 60 + mm;
-                        setSchedule((s) => {
-                          const copy = [...s];
-                          copy[idx] = { ...copy[idx], at };
-                          return copy.sort((a, b) => a.at - b.at);
+                        const nextSchedule = schedule
+                          .map((entry) =>
+                            entry.id === item.id ? { ...entry, at } : entry
+                          )
+                          .sort((a, b) => a.at - b.at);
+                        setSchedule(nextSchedule);
+                        sendControlPatch({
+                          schedule: nextSchedule.map(({ at, temp }) => ({ at, temp })),
                         });
                       }}
                       className="w-full rounded-md border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-sm"
                     />
                     <button
-                      onClick={() => setSchedule((s) => s.filter((_, i) => i !== idx))}
+                      onClick={() => {
+                        const nextSchedule = schedule.filter((entry) => entry.id !== item.id);
+                        setSchedule(nextSchedule);
+                        sendControlPatch({
+                          schedule: nextSchedule.map(({ at, temp }) => ({ at, temp })),
+                        });
+                      }}
                       className="rounded-md border border-zinc-800 px-2 py-1 text-sm hover:bg-white/10"
                     >
                       Remove
