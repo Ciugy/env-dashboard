@@ -69,8 +69,7 @@ latest_co2:   int   | None = None
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def update_backend(**kwargs) -> None:
-    """PATCH only the keys that are provided."""
-    payload = {k: v for k, v in kwargs.items() if v is not None}
+    payload = dict(kwargs)  # send everything, including None/False/0
     if not payload:
         return
     try:
@@ -235,9 +234,32 @@ while True:
         time.sleep(1)
         continue
 
-    # Single-char ESP32 override commands
+    # ESP32 commands — single-char actuator OR multi-char override
     if line in ("H", "h", "F", "f"):
         handle_serial_override(line)
+        continue
+
+    if line == "O1":
+        # Override activated from physical button
+        update_backend(overrideMode=True)
+        print("[Override] ON")
+        continue
+
+    if line == "O0":
+        # Override cleared — also wipe setpoint so a stale value
+        # doesn't immediately re-arm next time override turns on
+        update_backend(overrideMode=False, overrideSetpoint=None)
+        print("[Override] OFF")
+        continue
+
+    if line.startswith("SP:"):
+        # Setpoint from physical dial, e.g. "SP:21.5"
+        try:
+            sp = float(line[3:])
+            update_backend(overrideSetpoint=sp)
+            print(f"[Override] Setpoint -> {sp}C")
+        except ValueError:
+            print(f"[Override] Bad SP line: {line!r}")
         continue
 
     # JSON sensor payload
