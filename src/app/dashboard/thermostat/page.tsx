@@ -219,15 +219,26 @@ export default function ThermostatPage() {
   }
 
   const scheduledTemp = computeScheduledTemp(schedule);
-  const effectiveSetpoint = useSchedule ? scheduledTemp : targetTemp;
+  const effectiveSetpoint = overrideMode && overrideSetpoint != null
+    ? overrideSetpoint
+    : useSchedule
+      ? scheduledTemp
+      : targetTemp;
 
   const hysteresis = 0.5;
 
+  const displayMode = useMemo<Mode>(() => {
+    if (!overrideMode || overrideSetpoint == null) return mode;
+    if (lastTempNumber < overrideSetpoint - hysteresis) return "HEAT";
+    if (lastTempNumber > overrideSetpoint + hysteresis) return "COOL";
+    return "AUTO";
+  }, [mode, overrideMode, overrideSetpoint, lastTempNumber, hysteresis]);
+
   const heatCall = useMemo(() => {
-    if (mode === "OFF") return false;
-    if (mode === "COOL") return false;
+    if (displayMode === "OFF") return false;
+    if (displayMode === "COOL") return false;
     return lastTempNumber < effectiveSetpoint - hysteresis;
-  }, [mode, lastTempNumber, effectiveSetpoint]);
+  }, [displayMode, lastTempNumber, effectiveSetpoint, hysteresis]);
 
   // OLD POST POLLING
   // useEffect(() => {
@@ -292,10 +303,10 @@ export default function ThermostatPage() {
   const gap = circumference - dash;
 
   const coolCall = useMemo(() => {
-    if (mode === "OFF") return false;
-    if (mode === "HEAT") return false;
+    if (displayMode === "OFF") return false;
+    if (displayMode === "HEAT") return false;
     return lastTempNumber > effectiveSetpoint + hysteresis;
-  }, [mode, lastTempNumber, effectiveSetpoint]);
+  }, [displayMode, lastTempNumber, effectiveSetpoint, hysteresis]);
 
 
   return (
@@ -398,11 +409,11 @@ export default function ThermostatPage() {
                   strokeDasharray={`${dash} ${gap}`}
                   transform="rotate(-210 100 100)"
                   className={
-                    mode === "OFF"
+                    displayMode === "OFF"
                       ? "text-zinc-700"
-                      : heatCall
+                      : displayMode === "HEAT"
                         ? "text-orange-400"
-                        : coolCall
+                        : displayMode === "COOL"
                           ? "text-blue-400"
                           : "text-sky-400"
                   }
@@ -410,13 +421,15 @@ export default function ThermostatPage() {
               </svg>
               <div className="absolute inset-0 flex flex-col items-center justify-center">
                 <div className="text-xs uppercase tracking-widest opacity-60">
-                  {mode === "OFF"
+                  {displayMode === "OFF"
                     ? "System Off"
-                    : heatCall
+                    : displayMode === "HEAT"
                       ? "Heating"
-                      : coolCall
+                      : displayMode === "COOL"
                         ? "Cooling"
-                        : "Holding"}
+                        : overrideMode
+                          ? "Override Holding"
+                          : "Holding"}
                 </div>
                 <div className="mt-2 text-5xl font-semibold tabular-nums">
                   {effectiveSetpoint.toFixed(1)}°
