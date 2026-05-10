@@ -83,7 +83,7 @@ def handle_override_command(cmd):
     elif cmd == "h":
         update_backend(heater=False)
     elif cmd == "F":
-        update_backend(cooling_fan=30)  # SAFER
+        update_backend(cooling_fan=100)
     elif cmd == "f":
         update_backend(cooling_fan=0)
 
@@ -117,11 +117,11 @@ def send_actuator_commands():
     )
 
     # ------------------------------
-    # OVERRIDE MODE (manual control)
+    # OVERRIDE MODE
     # ------------------------------
     if override_mode:
 
-        # If override setpoint not chosen yet → DO NOTHING
+        # Wait for override setpoint
         if override_sp is None:
             update_backend(
                 mode="OFF",
@@ -139,7 +139,7 @@ def send_actuator_commands():
 
         sp = override_sp
 
-        # DIRECT SWITCHING — NO LAG
+        # DIRECT SWITCHING
         if current_temp > sp:
             mode = "COOL"
         elif current_temp < sp:
@@ -158,12 +158,8 @@ def send_actuator_commands():
             heater_on = False
             fan_pwm = 0
 
-        # Humidifier rule
+        # Humidifier 
         humidifier_on = current_hum < 15
-
-        # Safety cap for humidifier fan
-        if humidifier_on:
-            fan_pwm = min(fan_pwm, 30)
 
         update_backend(
             mode=mode,
@@ -182,6 +178,23 @@ def send_actuator_commands():
         return
 
     # ------------------------------
+    # HARD OFF MODE LOCK
+    # ------------------------------
+    if mode == "OFF":
+        update_backend(
+            mode="OFF",
+            heater=False,
+            cooling_fan=0,
+            humidifier=False
+        )
+        print_status(
+            f"Override: False (Setpoint: {setpoint})",
+            "Heater: False | Fan: 0% | Humidifier: False",
+            sensor_text
+        )
+        return
+
+    # ------------------------------
     # NORMAL MODE
     # ------------------------------
     if override_sp is not None:
@@ -190,7 +203,7 @@ def send_actuator_commands():
     if setpoint is None:
         return
 
-    # DIRECT SWITCHING — NO LAG
+    # DIRECT SWITCHING
     if current_temp > setpoint:
         mode = "COOL"
     elif current_temp < setpoint:
@@ -209,12 +222,8 @@ def send_actuator_commands():
         heater_on = False
         fan_pwm = 0
 
-    # Humidifier rule
+    # Humidifier 
     humidifier_on = current_hum < 15
-
-    # Safety cap
-    if humidifier_on:
-        fan_pwm = min(fan_pwm, 30)
 
     update_backend(
         mode=mode,
