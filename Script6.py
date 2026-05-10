@@ -147,20 +147,11 @@ def send_actuator_commands() -> None:
 
     sensor_text = format_sensor_text()
 
-    # ── 1. System is OFF — hard lock, nothing runs ────────────────────────────
-    if mode == "OFF":
-        all_off()
-        print_status(
-            "Mode: OFF",
-            "Heater: OFF | Fan: 0% | Humidifier: OFF",
-            sensor_text,
-        )
-        return
-
-    # ── 2. Override mode — use override setpoint, keep user mode intact ───────
+    # ── 1. Override mode — highest priority, even beats OFF ──────────────────
     #
-    # BUG FIX: we do NOT call update_backend(mode=...) here, which was
-    # previously corrupting the user's chosen mode on the frontend.
+    # Override is a physical button on the device — if someone is standing
+    # there pressing it, they want the system to respond regardless of what
+    # mode the frontend last set.
     if override_mode:
         if override_sp is None:
             # Override enabled but no setpoint yet — safe fallback
@@ -188,10 +179,17 @@ def send_actuator_commands() -> None:
         )
         return
 
+    # ── 2. System is OFF — hard lock, nothing runs ───────────────────────────
+    if mode == "OFF":
+        all_off()
+        print_status(
+            "Mode: OFF",
+            "Heater: OFF | Fan: 0% | Humidifier: OFF",
+            sensor_text,
+        )
+        return
+
     # ── 3. Normal mode ────────────────────────────────────────────────────────
-    #
-    # BUG FIX: we only use override_sp when overrideMode is True (handled
-    # above). Here we always use the regular setpoint.
     if setpoint is None:
         return
 
