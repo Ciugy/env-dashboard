@@ -1,11 +1,9 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import UserLocation from "@/components/ui/layout/Location";
-
 import {
-  LineChart,
-  Line,
+  AreaChart,
   Area,
   XAxis,
   YAxis,
@@ -13,6 +11,8 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 type Reading = {
   timestamp: string;
@@ -25,297 +25,506 @@ type Reading = {
   scd_hum: number;
 };
 
-function Tile({
+type ChartTab = "co2" | "temp" | "humidity" | "pressure";
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function co2Status(co2: number): {
+  label: string;
+  color: string;
+  bg: string;
+  border: string;
+  emoji: string;
+} {
+  if (co2 >= 1200)
+    return {
+      label: "Poor",
+      color: "text-red-400",
+      bg: "bg-red-500/10",
+      border: "border-red-500/30",
+      emoji: "🔴",
+    };
+  if (co2 >= 800)
+    return {
+      label: "Moderate",
+      color: "text-amber-400",
+      bg: "bg-amber-500/10",
+      border: "border-amber-500/30",
+      emoji: "🟡",
+    };
+  return {
+    label: "Good",
+    color: "text-emerald-400",
+    bg: "bg-emerald-500/10",
+    border: "border-emerald-500/30",
+    emoji: "🟢",
+  };
+}
+
+function convertToCSV(readings: Reading[]): string {
+  const headers = [
+    "Timestamp","Temperature (°C)","Humidity (%)","Pressure (hPa)",
+    "Gas Resistance (Ω)","CO2 (ppm)","SCD Temp (°C)","SCD Humidity (%)",
+  ];
+  const rows = readings.map((r) => [
+    r.timestamp, r.bme_temp, r.bme_hum, r.bme_press,
+    r.bme_gas, r.scd_co2, r.scd_temp, r.scd_hum,
+  ]);
+  return [
+    headers.join(","),
+    ...rows.map((row) => row.map((c) => `"${c}"`).join(",")),
+  ].join("\n");
+}
+
+function downloadFile(content: string, filename: string, type: string) {
+  const blob = new Blob([content], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function delta(readings: Reading[], key: keyof Reading): number | null {
+  if (readings.length < 2) return null;
+  return (readings[0][key] as number) - (readings[1][key] as number);
+}
+
+function Arrow({ value }: { value: number | null }) {
+  if (value === null) return null;
+  if (Math.abs(value) < 0.05) return <span className="opacity-40">▬</span>;
+  return value > 0
+    ? <span className="text-red-400">▲ {Math.abs(value).toFixed(1)}</span>
+    : <span className="text-emerald-400">▼ {Math.abs(value).toFixed(1)}</span>;
+}
+
+// ─── Sparkline ────────────────────────────────────────────────────────────────
+
+function Sparkline({
+  data,
+  dataKey,
+  color,
+}: {
+  data: { [key: string]: number | string }[];
+  dataKey: string;
+  color: string;
+}) {
+  return (
+    <ResponsiveContainer width="100%" height="100%">
+      <AreaChart data={data} margin={{ top: 2, right: 0, left: 0, bottom: 0 }}>
+        <defs>
+          <linearGradient id={`spark-${dataKey}`} x1="0" x2="0" y1="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.25} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <Area
+          type="monotone"
+          dataKey={dataKey}
+          stroke={color}
+          strokeWidth={1.5}
+          fill={`url(#spark-${dataKey})`}
+          dot={false}
+          isAnimationActive={false}
+        />
+      </AreaChart>
+    </ResponsiveContainer>
+  );
+}
+
+// ─── Stat Tile ────────────────────────────────────────────────────────────────
+
+function StatTile({
   title,
   value,
   unit,
-  footer,
+  source,
+  trend,
+  sparkData,
+  sparkKey,
+  color,
+  loading,
 }: {
   title: string;
   value: string;
-  unit?: string;
-  footer?: string;
+  unit: string;
+  source: string;
+  trend: number | null;
+  sparkData: { [key: string]: number | string }[];
+  sparkKey: string;
+  color: string;
+  loading: boolean;
 }) {
   return (
-    <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm hover:shadow-lg transition-shadow duration-200 min-h-[110px]">
-      <div className="text-sm opacity-60">{title}</div>
-      <div className="mt-2 text-4xl sm:text-5xl font-semibold">
-        {value} <span className="text-xs opacity-60">{unit}</span>
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 flex flex-col gap-2 hover:border-zinc-700/60 transition-colors">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-zinc-500 uppercase tracking-widest">{title}</span>
+        <span className="text-xs text-zinc-600">{source}</span>
       </div>
-      {footer ? <div className="mt-2 text-xs opacity-70">{footer}</div> : null}
-      <div className="mt-3 h-10">
+
+      {loading ? (
+        <div className="h-10 rounded-lg bg-zinc-800/60 animate-pulse" />
+      ) : (
+        <div className="flex items-end gap-2">
+          <span className="text-4xl font-semibold tabular-nums text-zinc-100">
+            {value}
+          </span>
+          <span className="text-sm text-zinc-500 mb-1">{unit}</span>
+          <span className="text-xs text-zinc-500 mb-1 ml-auto">
+            <Arrow value={trend} />
+          </span>
+        </div>
+      )}
+
+      <div className="h-10 mt-1">
+        <Sparkline data={sparkData} dataKey={sparkKey} color={color} />
+      </div>
+    </div>
+  );
+}
+
+// ─── CO₂ Badge ───────────────────────────────────────────────────────────────
+
+function CO2Tile({ co2, loading }: { co2: number; loading: boolean }) {
+  const s = co2Status(co2);
+  return (
+    <div className={`rounded-2xl border ${s.border} ${s.bg} p-4 flex flex-col gap-2`}>
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-zinc-500 uppercase tracking-widest">CO₂</span>
+        <span className={`text-xs font-medium px-2 py-0.5 rounded-full ${s.bg} ${s.color} border ${s.border}`}>
+          {s.emoji} {s.label}
+        </span>
+      </div>
+
+      {loading ? (
+        <div className="h-10 rounded-lg bg-zinc-800/60 animate-pulse" />
+      ) : (
+        <div className="flex items-end gap-2">
+          <span className={`text-4xl font-semibold tabular-nums ${s.color}`}>
+            {co2.toFixed(0)}
+          </span>
+          <span className="text-sm text-zinc-500 mb-1">ppm</span>
+        </div>
+      )}
+
+      <div className="text-xs text-zinc-500">SCD-40</div>
+    </div>
+  );
+}
+
+// ─── Chart tabs ───────────────────────────────────────────────────────────────
+
+const CHART_TABS: { key: ChartTab; label: string; dataKey: string; unit: string; color: string }[] = [
+  { key: "co2",      label: "CO₂",         dataKey: "co2",   unit: "ppm",  color: "#06b6d4" },
+  { key: "temp",     label: "Temperature", dataKey: "temp",  unit: "°C",   color: "#f97316" },
+  { key: "humidity", label: "Humidity",    dataKey: "hum",   unit: "%",    color: "#8b5cf6" },
+  { key: "pressure", label: "Pressure",    dataKey: "press", unit: "hPa",  color: "#10b981" },
+];
+
+function TrendChart({
+  data,
+}: {
+  data: { t: string; temp: number; hum: number; press: number; co2: number }[];
+}) {
+  const [active, setActive] = useState<ChartTab>("co2");
+  const tab = CHART_TABS.find((t) => t.key === active)!;
+
+  return (
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 sm:col-span-2 lg:col-span-3">
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <div>
+          <div className="text-xs text-zinc-500 uppercase tracking-widest">Trend</div>
+          <div className="text-base font-semibold text-zinc-100 mt-0.5">
+            {tab.label} over time
+          </div>
+        </div>
+
+        {/* Tab pills */}
+        <div className="flex gap-1 rounded-xl border border-zinc-800 bg-zinc-900/60 p-1">
+          {CHART_TABS.map((t) => (
+            <button
+              key={t.key}
+              onClick={() => setActive(t.key)}
+              className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors ${
+                active === t.key
+                  ? "bg-zinc-700 text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-300"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 h-52">
         <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={[{t:'1', v:1},{t:'2',v:2},{t:'3',v:1.5},{t:'4',v:2.2}] }>
-            <Line type="monotone" dataKey="v" stroke="#06b6d4" strokeWidth={2} dot={false} />
-          </LineChart>
+          <AreaChart data={data} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+            <defs>
+              <linearGradient id="chartGrad" x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor={tab.color} stopOpacity={0.2} />
+                <stop offset="100%" stopColor={tab.color} stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="#27272a" />
+            <XAxis
+              dataKey="t"
+              tick={{ fontSize: 11, fill: "#71717a" }}
+              tickLine={false}
+              axisLine={false}
+            />
+            <YAxis
+              tick={{ fontSize: 11, fill: "#71717a" }}
+              tickLine={false}
+              axisLine={false}
+            />
+            <Tooltip
+              contentStyle={{
+                background: "#18181b",
+                border: "1px solid #3f3f46",
+                borderRadius: "0.5rem",
+                fontSize: "12px",
+                color: "#e4e4e7",
+              }}
+              formatter={(v?: number) => [v ? `${v.toFixed(1)} ${tab.unit}` : "", tab.label]}
+              labelStyle={{ color: "#71717a" }}
+            />
+            <Area
+              type="monotone"
+              dataKey={tab.dataKey}
+              stroke={tab.color}
+              strokeWidth={2}
+              fill="url(#chartGrad)"
+              dot={false}
+              isAnimationActive={false}
+            />
+          </AreaChart>
         </ResponsiveContainer>
       </div>
     </div>
   );
 }
 
-function StatusBadge({ co2 }: { co2: number }) {
-  let label = "Good";
-  let cls =
-    "bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200";
+// ─── Alerts panel ─────────────────────────────────────────────────────────────
 
-  if (co2 >= 800 && co2 < 1200) {
-    label = "Moderate";
-    cls =
-      "bg-amber-100 text-amber-900 dark:bg-amber-900/40 dark:text-amber-200";
-  } else if (co2 >= 1200) {
-    label = "Poor";
-    cls = "bg-red-100 text-red-900 dark:bg-red-900/40 dark:text-red-200";
-  }
+function AlertsPanel({ co2, hum }: { co2: number; hum: number }) {
+  const alerts: { msg: string; level: "warn" | "ok" }[] = [];
+
+  if (co2 >= 1200) alerts.push({ msg: "CO₂ critical — ventilate immediately.", level: "warn" });
+  else if (co2 >= 800) alerts.push({ msg: "CO₂ elevated — consider ventilation.", level: "warn" });
+  else alerts.push({ msg: "CO₂ within normal range.", level: "ok" });
+
+  if (hum >= 70) alerts.push({ msg: "Humidity high — dehumidifier recommended.", level: "warn" });
+  else if (hum < 30) alerts.push({ msg: "Humidity low — consider a humidifier.", level: "warn" });
+  else alerts.push({ msg: "Humidity within normal range.", level: "ok" });
 
   return (
-    <span className={`inline-flex items-center gap-2 px-2 py-1 rounded-lg text-xs font-medium ${cls}`}>
-      <span aria-hidden>
-        {co2 >= 1200 ? "🔥" : co2 >= 800 ? "⚠️" : "✅"}
-      </span>
-      {label}
-    </span>
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 sm:col-span-2 lg:col-span-1 flex flex-col gap-3">
+      <div className="text-xs text-zinc-500 uppercase tracking-widest">Alerts</div>
+      {alerts.map((a, i) => (
+        <div
+          key={i}
+          className={`flex items-start gap-2 text-xs rounded-lg p-2 ${
+            a.level === "warn"
+              ? "bg-amber-500/10 text-amber-300 border border-amber-500/20"
+              : "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+          }`}
+        >
+          <span>{a.level === "warn" ? "⚠" : "✓"}</span>
+          <span>{a.msg}</span>
+        </div>
+      ))}
+    </div>
   );
 }
 
-function convertToCSV(readings: Reading[]): string {
-  const headers = [
-    "Timestamp",
-    "Temperature (°C)",
-    "Humidity (%)",
-    "Pressure (hPa)",
-    "Gas Resistance (Ω)",
-    "CO2 (ppm)",
-    "SCD Temp (°C)",
-    "SCD Humidity (%)",
-  ];
+// ─── Notes tile ───────────────────────────────────────────────────────────────
 
-  const rows = readings.map((r) => [
-    r.timestamp,
-    r.bme_temp,
-    r.bme_hum,
-    r.bme_press,
-    r.bme_gas,
-    r.scd_co2,
-    r.scd_temp,
-    r.scd_hum,
-  ]);
+function NotesTile() {
+  const [notes, setNotes] = useState("");
+  const [saved, setSaved] = useState(false);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
-  const csvContent = [
-    headers.join(","),
-    ...rows.map((row) => row.map((cell) => `"${cell}"`).join(",")),
-  ].join("\n");
-
-  return csvContent;
-}
-
-function downloadFile(content: string, filename: string, type: string) {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
-
-export default function Dashboard() {
-  const [readings, setReadings] = useState<Reading[]>([]);
-  const [interval, _setInterval] = useState(5000);
-  const [isExporting, setIsExporting] = useState(false);
-
-  // Fetch DB data every 5 seconds
+  // Load from localStorage on mount
   useEffect(() => {
-  async function load() {
-    try {
-      const res = await fetch("/api/readings");
-      const json = await res.json();
+    const stored = localStorage.getItem("dashboard-notes");
+    if (stored) setNotes(stored);
+  }, []);
 
-      if (Array.isArray(json)) {
-        setReadings(json);
+  function handleChange(e: React.ChangeEvent<HTMLTextAreaElement>) {
+    const val = e.target.value;
+    setNotes(val);
+    setSaved(false);
+    clearTimeout(timerRef.current);
+    timerRef.current = setTimeout(() => {
+      localStorage.setItem("dashboard-notes", val);
+      setSaved(true);
+    }, 800);
+  }
+
+  return (
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 sm:col-span-2 lg:col-span-2 flex flex-col gap-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs text-zinc-500 uppercase tracking-widest">Notes</span>
+        {saved && <span className="text-xs text-emerald-500">Saved</span>}
+      </div>
+      <textarea
+        value={notes}
+        onChange={handleChange}
+        placeholder="Calibration notes, sensor placement, room details…"
+        rows={4}
+        className="w-full bg-transparent text-sm text-zinc-300 placeholder:text-zinc-600 resize-none outline-none border border-zinc-800/60 rounded-lg p-2 focus:border-zinc-600 transition-colors"
+      />
+    </div>
+  );
+}
+
+// ─── Export tile ──────────────────────────────────────────────────────────────
+
+function ExportTile({ readings }: { readings: Reading[] }) {
+  const [exporting, setExporting] = useState(false);
+
+  function doExport(type: "csv" | "json") {
+    setExporting(true);
+    const ts = new Date().toISOString().slice(0, 10);
+    try {
+      if (type === "csv") {
+        downloadFile(convertToCSV(readings), `readings-${ts}.csv`, "text/csv");
       } else {
-        console.error("API returned non-array:", json);
-        setReadings([]); // fallback
+        downloadFile(JSON.stringify(readings, null, 2), `readings-${ts}.json`, "application/json");
       }
-    } catch (err) {
-      console.error("Failed to load readings:", err);
-      setReadings([]); // fallback
+    } finally {
+      setExporting(false);
     }
   }
 
-  load();
-  const refreshRate = setInterval(load, interval);
-  return () => clearInterval(refreshRate);
-}, [interval]);
+  return (
+    <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 sm:col-span-2 lg:col-span-2 flex flex-col gap-3">
+      <div className="text-xs text-zinc-500 uppercase tracking-widest">Export</div>
+      <div className="text-xs text-zinc-500">
+        {readings.length.toLocaleString()} readings available
+      </div>
+      <div className="flex gap-2 mt-auto">
+        <button
+          onClick={() => doExport("csv")}
+          disabled={exporting || readings.length === 0}
+          className="flex-1 py-2 rounded-lg text-sm font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          ↓ CSV
+        </button>
+        <button
+          onClick={() => doExport("json")}
+          disabled={exporting || readings.length === 0}
+          className="flex-1 py-2 rounded-lg text-sm font-medium border border-zinc-700 text-zinc-300 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          ↓ JSON
+        </button>
+      </div>
+    </div>
+  );
+}
 
-  const handleExportCSV = () => {
-    setIsExporting(true);
-    try {
-      const csv = convertToCSV(readings);
-      const timestamp = new Date().toISOString().slice(0, 10);
-      downloadFile(csv, `sensor-readings-${timestamp}.csv`, "text/csv");
-    } finally {
-      setIsExporting(false);
+// ─── Dashboard ────────────────────────────────────────────────────────────────
+
+export default function Dashboard() {
+  const [readings, setReadings] = useState<Reading[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function load() {
+      try {
+        const res = await fetch("/api/readings");
+        const json = await res.json();
+        if (Array.isArray(json)) {
+          setReadings(json);
+        }
+      } catch (err) {
+        console.error("Failed to load readings:", err);
+      } finally {
+        setLoading(false);
+      }
     }
-  };
 
-  const handleExportJSON = () => {
-    setIsExporting(true);
-    try {
-      const json = JSON.stringify(readings, null, 2);
-      const timestamp = new Date().toISOString().slice(0, 10);
-      downloadFile(json, `sensor-readings-${timestamp}.json`, "application/json");
-    } finally {
-      setIsExporting(false);
-    }
-  };
-
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, []);
 
   const latest = readings[0];
+  const current = {
+    temp:  latest?.bme_temp  ?? 0,
+    hum:   latest?.scd_hum   ?? 0,
+    press: latest?.bme_press ?? 0,
+    co2:   latest?.scd_co2   ?? 0,
+  };
 
-  const current = latest
-    ? {
-        temp: latest.bme_temp,
-        hum: latest.scd_hum,
-        press: latest.bme_press,
-        co2: latest.scd_co2,
-      }
-    : {
-        temp: 0,
-        hum: 0,
-        press: 0,
-        co2: 0,
-      };
-
-  const data = readings
-    .map((r) => ({
-      t: r.timestamp.slice(11, 16), // HH:MM
-      temp: r.bme_temp,
-      hum: r.bme_hum,
-      press: r.bme_press,
-      co2: r.scd_co2,
-    }))
-    .reverse();
-
-  const alertMsg =
-    current.co2 >= 1200
-      ? "⚠️ CO₂ is high. Improve ventilation."
-      : "Everything looks good";
-
-  const humAlert =
-    current.hum >= 70
-      ? "⚠️ Humidity is high. Consider using a dehumidifier."
-      : "All readings are within normal ranges.";
+  const chartData = [...readings].reverse().map((r) => ({
+    t:     r.timestamp.slice(11, 16),
+    temp:  r.bme_temp,
+    hum:   r.scd_hum,
+    press: r.bme_press,
+    co2:   r.scd_co2,
+  }));
+  
+  const sparkData = [...readings].reverse().slice(-20).map((r) => ({
+    temp:  r.bme_temp,
+    hum:   r.scd_hum,
+    press: r.bme_press,
+    co2:   r.scd_co2,
+  }));
 
   return (
-    <div className="grid gap-4 md:gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
-      <Tile
+    <div className="grid gap-4 md:gap-5 grid-cols-1 sm:grid-cols-2 lg:grid-cols-4">
+
+      <StatTile
         title="Temperature"
         value={current.temp.toFixed(1)}
         unit="°C"
-        footer="BME680"
+        source="BME680"
+        trend={delta(readings, "bme_temp")}
+        sparkData={sparkData}
+        sparkKey="temp"
+        color="#f97316"
+        loading={loading}
       />
-      <Tile
+      <StatTile
         title="Humidity"
         value={current.hum.toFixed(0)}
         unit="%"
-        footer="BME680"
+        source="SCD-40"
+        trend={delta(readings, "scd_hum")}
+        sparkData={sparkData}
+        sparkKey="hum"
+        color="#8b5cf6"
+        loading={loading}
       />
-      <Tile
+      <StatTile
         title="Pressure"
         value={current.press.toFixed(1)}
         unit="hPa"
-        footer="BME680"
+        source="BME680"
+        trend={delta(readings, "bme_press")}
+        sparkData={sparkData}
+        sparkKey="press"
+        color="#10b981"
+        loading={loading}
       />
+      <CO2Tile co2={current.co2} loading={loading} />
 
-      <div className={`rounded-2xl border ${current.co2 >= 1200 ? 'border-red-400/40' : current.co2 >= 800 ? 'border-amber-400/40' : 'border-emerald-400/40'} bg-white dark:bg-zinc-900 p-4 shadow-sm`}>
-        <div className="flex items-center justify-between">
-          <div className="text-sm opacity-70">CO₂</div>
-          <StatusBadge co2={current.co2} />
-        </div>
-        <div className="mt-2 text-3xl font-semibold">
-          {current.co2.toFixed(0)} <span className="text-base opacity-70">ppm</span>
-        </div>
-        <div className="mt-2 text-xs opacity-70">SCD-40</div>
+      <TrendChart data={chartData} />
+      <AlertsPanel co2={current.co2} hum={current.hum} />
+
+      <NotesTile />
+      <ExportTile readings={readings} />
+
+      <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4 sm:col-span-2 lg:col-span-4">
+        <div className="text-xs text-zinc-500 uppercase tracking-widest mb-2">Location</div>
+        <UserLocation />
       </div>
 
-      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-3">
-        <div className="flex items-center justify-between">
-          <div>
-            <div className="text-sm opacity-70">CO₂ Trend</div>
-            <div className="text-lg font-semibold">Recent readings</div>
-          </div>
-          <div className="text-xs opacity-70">Live</div>
-        </div>
-
-        <div className="mt-4 h-56">
-          <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={data}>
-              <CartesianGrid strokeDasharray="3 3" opacity={0.08} />
-              <XAxis dataKey="t" tick={{ fontSize: 12 }} />
-              <YAxis tick={{ fontSize: 12 }} />
-              <Tooltip formatter={(value: any) => `${value} ppm`} />
-              <defs>
-                <linearGradient id="co2Grad" x1="0" x2="0" y1="0" y2="1">
-                  <stop offset="0%" stopColor="#06b6d4" stopOpacity={0.12} />
-                  <stop offset="100%" stopColor="#06b6d4" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <Area type="monotone" dataKey="co2" stroke="#06b6d4" fill="url(#co2Grad)" strokeWidth={2} dot={false} />
-              <Line type="monotone" dataKey="co2" stroke="#06b6d4" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-1">
-        <div className="text-sm opacity-70">Alerts</div>
-        <div className="mt-2 text-base font-semibold">Status</div>
-        <div className="mt-3 text-sm opacity-80 leading-relaxed">{alertMsg}</div>
-
-        <div className="mt-4 text-xs opacity-60">
-          Thresholds: {humAlert}
-        </div>
-      </div>
-
-      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
-        <div className="text-sm opacity-70">Notes</div>
-        <div className="mt-2 text-sm opacity-80">
-          Add calibration notes, room info, or sensor placement details here.
-        </div>
-      </div>
-
-      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
-        <div className="text-sm opacity-70">Location</div>
-        <div className="mt-2 text-sm opacity-80">
-         <UserLocation />
-        </div>
-      </div>
-
-      <div className="rounded-2xl border bg-white dark:bg-zinc-900 p-4 shadow-sm sm:col-span-2 lg:col-span-2">
-        <div className="text-sm opacity-70">Data Export</div>
-        <div className="mt-3 text-xs opacity-80 mb-4">
-          Download {readings.length} readings in your preferred format
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={handleExportCSV}
-            disabled={isExporting || readings.length === 0}
-            className="flex-1 px-3 py-2 bg-blue-500 hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            {isExporting ? "Exporting..." : "CSV"}
-          </button>
-          <button
-            onClick={handleExportJSON}
-            disabled={isExporting || readings.length === 0}
-            className="flex-1 px-3 py-2 bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors"
-          >
-            {isExporting ? "Exporting..." : "JSON"}
-          </button>
-        </div>
-      </div>
     </div>
   );
 }
