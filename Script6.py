@@ -109,37 +109,57 @@ def co2_fan_speed(co2: int | None) -> int:
 
 def compute_actuators(current_temp: float, current_hum: float, setpoint: float, mode: str = "AUTO"):
     """
+    Apply hysteresis and return (heater_on, fan_pwm, fan_reason).
+    Never call this when mode is OFF.
+
+    Returns fan_reason: "thermal" | "co2" | "both" | "none"
+
+    Rules:
+    - HEAT: heater when cold. CO2 fan may coexist with heater. No thermal fan.
+    - COOL: thermal fan when hot. CO2 fan adds if needed. No heater.
+    - AUTO: heater when cold, thermal fan when hot. CO2 always independent.
+    - CO2 fan NEVER suppresses heater — ventilation + heating is safe.
+    - Thermal fan DOES suppress heater — cooling against heating wastes energy.
     """
     needs_heat = current_temp < setpoint - HYSTERESIS
     needs_cool = current_temp > setpoint + HYSTERESIS
 
-    # Thermal decisions gated by mode
+    # ── Thermal decisions (gated by mode) ────────────────────────────────────
     if mode == "HEAT":
         heater_on   = needs_heat
-        thermal_fan = 0           # never run cooling fan in heat-only mode
+        thermal_fan = 0                           # heat-only: never cool
     elif mode == "COOL":
-        heater_on   = False       # never heat in cool-only mode
+        heater_on   = False                       # cool-only: never heat
         thermal_fan = 100 if needs_cool else 0
     else:  # AUTO
         heater_on   = needs_heat and not needs_cool
         thermal_fan = 100 if needs_cool else 0
 
-    # CO2 ventilation — independent of thermal direction
+    # ── CO2 ventilation (fully independent of thermal mode) ──────────────────
     ventilation_fan = co2_fan_speed(latest_co2)
 
-    # Take the higher fan demand
-    fan_pwm = max(thermal_fan, ventilation_fan)
-
-    # Only suppress the heater when THERMAL cooling is active — not just
-    # because the CO2 fan is running. CO2 ventilation + heating is safe
-    # and intentional (fresh air while warming the room).
+    # ── Heater suppression ───────────────────────────────────────────────────
+    # Only suppress when THERMAL cooling is active. CO2 ventilation + heater
+    # is intentional and safe — the fan clears air, the heater warms the room.
     if thermal_fan > 0 and heater_on:
         heater_on = False
 
-    # Humidifier is intentionally NOT decided here anymore.
-    # The user controls it manually from the dashboard or physical button.
-    # Returning None so call sites can pass the backend value through directly.
-    return heater_on, fan_pwm
+    # ── Final fan PWM: take the higher of the two independent demands ─────────
+    fan_pwm = max(thermal_fan, ventilation_fan)
+
+    # ── Fan reason tag for terminal and status reporting ─────────────────────
+    has_thermal = thermal_fan > 0
+    has_co2     = ventilation_fan > 0
+    if has_thermal and has_co2:
+        fan_reason = "both"
+    elif has_thermal:
+        fan_reason = "thermal"
+    elif has_co2:
+        fan_reason = "co2"
+    else:
+        fan_reason = "none"
+
+    return heater_on, fan_pwm, fan_reason
 
 
 def print_status(override_text: str, actuator_text: str, sensor_text: str) -> None:
@@ -165,6 +185,7 @@ def format_sensor_text() -> str:
 
 
 def handle_serial_override(cmd: str) -> None:
+    """Handle single-char commands that come straight from the Arduino."""
     if cmd == "H":
         update_backend(heater=True)
     elif cmd == "h":
@@ -177,7 +198,10 @@ def handle_serial_override(cmd: str) -> None:
 # ─── Main control loop ────────────────────────────────────────────────────────
 
 def send_actuator_commands() -> None:
-    
+    """
+    Fetch control state once, decide what the actuators should do,
+    push only the actuator fields back — never touch mode/overrideMode.
+    """
     if latest_temp is None or latest_hum is None:
         return
 
@@ -187,12 +211,31 @@ def send_actuator_commands() -> None:
         return
 
     mode              = state.get("mode", "OFF")
-    setpoint          = state.get("setpoint")
+    manual_setpoint   = state.get("setpoint")       # the dial / manual value
+    use_schedule      = state.get("useSchedule", False)
+    schedule          = state.get("schedule", [])   # list of {at, end, temp}
     override_mode     = state.get("overrideMode", False)
     override_sp       = state.get("overrideSetpoint")
-    # Read the user-controlled humidifier state from the backend.
-    # The Pi respects whatever the user set — it never forces it OFF.
     user_humidifier   = state.get("humidifier", False)
+
+    if use_schedule and schedule:
+        from datetime import datetime
+        now_min = datetime.now().hour * 60 + datetime.now().minute
+        active_temp = None
+        for item in schedule:
+            at  = item.get("at",  0)
+            end = item.get("end", 0)
+            spans_midnight = end <= at
+            if spans_midnight:
+                in_range = now_min >= at or now_min < end
+            else:
+                in_range = at <= now_min < end
+            if in_range:
+                active_temp = item.get("temp")
+                break
+        setpoint = active_temp if active_temp is not None else manual_setpoint
+    else:
+        setpoint = manual_setpoint
 
     sensor_text = format_sensor_text()
 
@@ -208,17 +251,16 @@ def send_actuator_commands() -> None:
             )
             return
 
-        heater_on, fan_pwm = compute_actuators(
+        heater_on, fan_pwm, fan_reason = compute_actuators(
             latest_temp, latest_hum, override_sp, mode="AUTO"
         )
         update_backend(
             heater=heater_on,
             cooling_fan=fan_pwm,
-            # humidifier deliberately omitted — user controls it manually
         )
         print_status(
             f"Override: ON (setpoint: {override_sp}°C)",
-            f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {user_humidifier} (user)",
+            f"Heater: {heater_on} | Fan: {fan_pwm}% [{fan_reason}] | Humidifier: {user_humidifier} (user)",
             sensor_text,
         )
         return
@@ -234,38 +276,30 @@ def send_actuator_commands() -> None:
         return
 
     # ── 3. Normal mode ────────────────────────────────────────────────────────
-    # Note: the frontend fan slider can also POST cooling_fan values.
-    # That's fine — the Pi re-computes and overwrites it every POLL_INTERVAL
-    # so CO2/thermal logic always wins within one second.
+
     if setpoint is None:
         return
 
-    heater_on, fan_pwm = compute_actuators(
+    heater_on, fan_pwm, fan_reason = compute_actuators(
         latest_temp, latest_hum, setpoint, mode=mode
     )
-    # Mode-gating is handled inside compute_actuators.
-    # Humidifier is not touched — it stays at whatever the user set.
 
     update_backend(
         heater=heater_on,
         cooling_fan=fan_pwm,
-        # humidifier deliberately omitted — user controls it manually
     )
 
-    # Build a fan reason tag for the terminal so it's clear why the fan is on
-    fan_reason = ""
-    if fan_pwm > 0:
-        thermal_cooling = latest_temp is not None and latest_temp > setpoint + HYSTERESIS
-        co2_demand      = latest_co2 is not None and latest_co2 >= CO2_WARN
-        reasons = []
-        if thermal_cooling: reasons.append("thermal cooling")
-        if co2_demand:      reasons.append(f"CO2 {latest_co2}ppm")
-        if heater_on:       reasons.append("+ heater coexist")
-        if reasons: fan_reason = f" ({', '.join(reasons)})"
+    # Build schedule context for the terminal line
+    schedule_ctx = ""
+    if use_schedule:
+        if setpoint != manual_setpoint:
+            schedule_ctx = f" [schedule: {setpoint}°C, manual was {manual_setpoint}°C]"
+        else:
+            schedule_ctx = " [no range active, using manual]"
 
     print_status(
-        f"Mode: {mode} (setpoint: {setpoint}°C)",
-        f"Heater: {heater_on} | Fan: {fan_pwm}%{fan_reason} | Humidifier: {user_humidifier} (user)",
+        f"Mode: {mode} (setpoint: {setpoint}°C){schedule_ctx}",
+        f"Heater: {heater_on} | Fan: {fan_pwm}% [{fan_reason}] | Humidifier: {user_humidifier} (user)",
         sensor_text,
     )
 
@@ -286,7 +320,7 @@ while True:
         time.sleep(1)
         continue
 
-    # ESP32 commands — single-char actuator OR multi-char override
+    # Arduino commands — single-char actuator OR multi-char override
     if line in ("H", "h", "F", "f"):
         handle_serial_override(line)
         continue
@@ -305,7 +339,7 @@ while True:
         continue
 
     if line.startswith("SP:"):
-        # Setpoint from physical dial,
+        # Setpoint from physical dial, e.g. 
         try:
             sp = float(line[3:])
             update_backend(overrideSetpoint=sp)
