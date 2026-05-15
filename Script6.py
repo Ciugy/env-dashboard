@@ -5,6 +5,7 @@ import time
 from smbus2 import SMBus
 import requests
 
+# ─── RTC ─────────────────────────────────────────────────────────────────────
 
 RTC_ADDR = 0x68
 bus = SMBus(1)
@@ -22,6 +23,7 @@ def rtc_now() -> str:
     year  = 2000 + bcd_to_dec(data[6])
     return f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
 
+# ─── Config ───────────────────────────────────────────────────────────────────
 
 SERIAL_PORT    = "/dev/ttyACM0"
 BAUD_RATE      = 115200
@@ -32,6 +34,14 @@ SENSOR_INTERVAL = 0.05  # seconds between serial reads
 
 # Deadband / hysteresis — must move this far past setpoint before switching
 HYSTERESIS = 0.5  # °C
+
+# CO2 ventilation thresholds
+CO2_WARN     = 800   # ppm — elevated, fan starts at minimum speed
+CO2_HIGH     = 1200  # ppm — poor air quality, fan runs at full speed
+CO2_FAN_MIN  = 40    # % duty at CO2_WARN
+CO2_FAN_FULL = 100   # % duty at CO2_HIGH and above
+
+# ─── Database ─────────────────────────────────────────────────────────────────
 
 conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
@@ -48,12 +58,13 @@ cursor.execute("""
 """)
 conn.commit()
 
+# ─── Serial ───────────────────────────────────────────────────────────────────
 
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
-# Latest sensor values
+# ─── Latest sensor values ─────────────────────────────────────────────────────
 
 latest_temp:  float | None = None
 latest_hum:   float | None = None
@@ -61,8 +72,12 @@ latest_press: float | None = None
 latest_gas:   float | None = None
 latest_co2:   int   | None = None
 
+# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def update_backend(**kwargs) -> None:
+    """POST only the keys that are explicitly provided.
+    We keep False and 0 (they are valid values) but we do allow
+    explicit None values through — the backend treats null as a clear."""
     payload = dict(kwargs)  # send everything, including None/False/0
     if not payload:
         return
@@ -77,16 +92,46 @@ def all_off() -> None:
     update_backend(heater=False, cooling_fan=0, humidifier=False)
 
 
+def co2_fan_speed(co2: int | None) -> int:
+    """
+    Returns the fan duty cycle (0-100) demanded purely by CO2 level.
+    Linearly ramps from CO2_FAN_MIN at CO2_WARN to CO2_FAN_FULL at CO2_HIGH.
+    Returns 0 if CO2 is unknown or below the warning threshold.
+    """
+    if co2 is None or co2 < CO2_WARN:
+        return 0
+    if co2 >= CO2_HIGH:
+        return CO2_FAN_FULL
+    # Linear interpolation between WARN and HIGH
+    ratio = (co2 - CO2_WARN) / (CO2_HIGH - CO2_WARN)
+    return int(CO2_FAN_MIN + ratio * (CO2_FAN_FULL - CO2_FAN_MIN))
+
+
 def compute_actuators(current_temp: float, current_hum: float, setpoint: float):
     """
     Apply hysteresis and return (heater_on, fan_pwm, humidifier_on).
     Never call this when mode is OFF.
+
+    CO2 ventilation is evaluated independently of thermal control:
+    - If CO2 demands a higher fan speed than thermal logic, CO2 wins.
+    - If CO2 ventilation is needed while the heater would normally run,
+      the heater is suppressed — blowing cold air through a heater is
+      both inefficient and a fire risk.
     """
-    heater_on    = current_temp < setpoint - HYSTERESIS
-    fan_pwm      = 100 if current_temp > setpoint + HYSTERESIS else 0
-    # Heater and fan are mutually exclusive
-    if heater_on:
-        fan_pwm = 0
+    heater_on = current_temp < setpoint - HYSTERESIS
+    thermal_fan = 100 if current_temp > setpoint + HYSTERESIS else 0
+
+    # CO2 demand is independent of temperature
+    ventilation_fan = co2_fan_speed(latest_co2)
+
+    # Take the higher of the two fan demands
+    fan_pwm = max(thermal_fan, ventilation_fan)
+
+    # If the fan is running for any reason, suppress the heater
+    # (running a heater against active ventilation wastes energy and
+    # can overheat the element)
+    if fan_pwm > 0:
+        heater_on = False
 
     humidifier_on = current_hum < 15
     return heater_on, fan_pwm, humidifier_on
@@ -100,10 +145,16 @@ def print_status(override_text: str, actuator_text: str, sensor_text: str) -> No
 
 
 def format_sensor_text() -> str:
+    co2_str = f"{latest_co2} ppm"
+    if latest_co2 is not None:
+        if latest_co2 >= CO2_HIGH:
+            co2_str += " [POOR]"
+        elif latest_co2 >= CO2_WARN:
+            co2_str += " [WARN]"
     return (
         f"Temp: {latest_temp:.1f}°C | "
         f"Hum: {latest_hum:.0f}% | "
-        f"CO2: {latest_co2} ppm | "
+        f"CO2: {co2_str} | "
         f"Press: {latest_press:.0f} hPa"
     )
 
@@ -119,7 +170,13 @@ def handle_serial_override(cmd: str) -> None:
     elif cmd == "f":
         update_backend(cooling_fan=0)
 
+# ─── Main control loop ────────────────────────────────────────────────────────
+
 def send_actuator_commands() -> None:
+    """
+    Fetch control state once, decide what the actuators should do,
+    push only the actuator fields back — never touch mode/overrideMode.
+    """
     if latest_temp is None or latest_hum is None:
         return
 
@@ -135,7 +192,11 @@ def send_actuator_commands() -> None:
 
     sensor_text = format_sensor_text()
 
-    # Override mode — highest priority
+    # ── Override mode — highest priority, even beats OFF ──────────────────
+    #
+    # Override is a physical button on the device — if someone is standing
+    # there pressing it, they want the system to respond regardless of what
+    # mode the frontend last set.
     if override_mode:
         if override_sp is None:
             # Override enabled but no setpoint yet — safe fallback
@@ -163,7 +224,7 @@ def send_actuator_commands() -> None:
         )
         return
 
-    # System is OFF — hard lock, nothing runs 
+    # System is OFF — hard lock, nothing runs ───────────────────────────
     if mode == "OFF":
         all_off()
         print_status(
@@ -173,7 +234,7 @@ def send_actuator_commands() -> None:
         )
         return
 
-    # Normal mode 
+    # Normal mode ────────────────────────────────────────────────────────
     if setpoint is None:
         return
 
@@ -181,7 +242,7 @@ def send_actuator_commands() -> None:
         latest_temp, latest_hum, setpoint
     )
 
-    # Keep whatever the user explicitly asked for — if we're in HEAT mode, ignore any cooling demand;
+    # Respect the user's chosen mode direction
     if mode == "HEAT":
         fan_pwm = 0          # never cool in heat-only mode
     elif mode == "COOL":
@@ -193,14 +254,23 @@ def send_actuator_commands() -> None:
         humidifier=humidifier_on,
         # Deliberately NOT sending mode — leave it alone
     )
+
+    # Build a fan reason tag for the terminal so it's clear why the fan is on
+    fan_reason = ""
+    if fan_pwm > 0:
+        thermal_demand = latest_temp is not None and latest_temp > setpoint + HYSTERESIS
+        co2_demand     = latest_co2 is not None and latest_co2 >= CO2_WARN
+        reasons = []
+        if thermal_demand: reasons.append("thermal")
+        if co2_demand:     reasons.append(f"CO2 {latest_co2}ppm")
+        if reasons: fan_reason = f" ({', '.join(reasons)})"
+
     print_status(
         f"Mode: {mode} (setpoint: {setpoint}°C)",
-        f"Heater: {heater_on} | Fan: {fan_pwm}% | Humidifier: {humidifier_on}",
+        f"Heater: {heater_on} | Fan: {fan_pwm}%{fan_reason} | Humidifier: {humidifier_on}",
         sensor_text,
     )
 
-
-# Entry point 
 
 print("Listening for sensor data…")
 print("\n\n\n\n")
