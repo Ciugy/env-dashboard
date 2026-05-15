@@ -5,7 +5,6 @@ import time
 from smbus2 import SMBus
 import requests
 
-# ─── RTC ─────────────────────────────────────────────────────────────────────
 
 RTC_ADDR = 0x68
 bus = SMBus(1)
@@ -23,7 +22,6 @@ def rtc_now() -> str:
     year  = 2000 + bcd_to_dec(data[6])
     return f"{year}-{month:02d}-{day:02d} {hour:02d}:{minute:02d}:{sec:02d}"
 
-# ─── Config ───────────────────────────────────────────────────────────────────
 
 SERIAL_PORT    = "/dev/ttyACM0"
 BAUD_RATE      = 115200
@@ -34,8 +32,6 @@ SENSOR_INTERVAL = 0.05  # seconds between serial reads
 
 # Deadband / hysteresis — must move this far past setpoint before switching
 HYSTERESIS = 0.5  # °C
-
-# ─── Database ─────────────────────────────────────────────────────────────────
 
 conn   = sqlite3.connect(DB_PATH, check_same_thread=False)
 cursor = conn.cursor()
@@ -52,13 +48,12 @@ cursor.execute("""
 """)
 conn.commit()
 
-# ─── Serial ───────────────────────────────────────────────────────────────────
 
 ser = serial.Serial(SERIAL_PORT, BAUD_RATE, timeout=2)
 time.sleep(2)
 print("Serial ready")
 
-# ─── Latest sensor values ─────────────────────────────────────────────────────
+# Latest sensor values
 
 latest_temp:  float | None = None
 latest_hum:   float | None = None
@@ -66,7 +61,6 @@ latest_press: float | None = None
 latest_gas:   float | None = None
 latest_co2:   int   | None = None
 
-# ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def update_backend(**kwargs) -> None:
     payload = dict(kwargs)  # send everything, including None/False/0
@@ -125,13 +119,7 @@ def handle_serial_override(cmd: str) -> None:
     elif cmd == "f":
         update_backend(cooling_fan=0)
 
-# ─── Main control loop ────────────────────────────────────────────────────────
-
 def send_actuator_commands() -> None:
-    """
-    Fetch control state once, decide what the actuators should do,
-    push only the actuator fields back — never touch mode/overrideMode.
-    """
     if latest_temp is None or latest_hum is None:
         return
 
@@ -147,11 +135,7 @@ def send_actuator_commands() -> None:
 
     sensor_text = format_sensor_text()
 
-    # ── 1. Override mode — highest priority, even beats OFF ──────────────────
-    #
-    # Override is a physical button on the device — if someone is standing
-    # there pressing it, they want the system to respond regardless of what
-    # mode the frontend last set.
+    # Override mode — highest priority
     if override_mode:
         if override_sp is None:
             # Override enabled but no setpoint yet — safe fallback
@@ -179,7 +163,7 @@ def send_actuator_commands() -> None:
         )
         return
 
-    # ── 2. System is OFF — hard lock, nothing runs ───────────────────────────
+    # System is OFF — hard lock, nothing runs 
     if mode == "OFF":
         all_off()
         print_status(
@@ -189,7 +173,7 @@ def send_actuator_commands() -> None:
         )
         return
 
-    # ── 3. Normal mode ────────────────────────────────────────────────────────
+    # Normal mode 
     if setpoint is None:
         return
 
@@ -197,7 +181,7 @@ def send_actuator_commands() -> None:
         latest_temp, latest_hum, setpoint
     )
 
-    # Respect the user's chosen mode direction
+    # Keep whatever the user explicitly asked for — if we're in HEAT mode, ignore any cooling demand;
     if mode == "HEAT":
         fan_pwm = 0          # never cool in heat-only mode
     elif mode == "COOL":
@@ -216,7 +200,7 @@ def send_actuator_commands() -> None:
     )
 
 
-# ─── Entry point ──────────────────────────────────────────────────────────────
+# Entry point 
 
 print("Listening for sensor data…")
 print("\n\n\n\n")
@@ -232,7 +216,7 @@ while True:
         time.sleep(1)
         continue
 
-    # ESP32 commands — single-char actuator OR multi-char override
+    # Arduino commands — single-char actuator OR multi-char override
     if line in ("H", "h", "F", "f"):
         handle_serial_override(line)
         continue
@@ -251,7 +235,7 @@ while True:
         continue
 
     if line.startswith("SP:"):
-        # Setpoint from physical dial, e.g. "SP:21.5"
+        # Setpoint from physical dial, "SP:21.5"
         try:
             sp = float(line[3:])
             update_backend(overrideSetpoint=sp)

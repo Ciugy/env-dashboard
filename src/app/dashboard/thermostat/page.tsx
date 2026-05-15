@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -15,7 +15,8 @@ type SensorData = {
 
 type ScheduleItem = {
   id: string;
-  at: number;   // minutes since midnight
+  at: number;
+  end: number;
   temp: number;
 };
 
@@ -23,7 +24,7 @@ type ControlPatch = Partial<{
   mode: Mode;
   setpoint: number;
   useSchedule: boolean;
-  schedule: { at: number; temp: number }[];
+  schedule: { at: number; end: number; temp: number }[];
   overrideMode: boolean;
   overrideSetpoint: number | null;
   humidifier: boolean;
@@ -31,51 +32,48 @@ type ControlPatch = Partial<{
   heater: boolean;
 }>;
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function clamp(n: number, min: number, max: number) {
   return Math.min(max, Math.max(min, n));
 }
-
 function roundTo(n: number, step: number) {
   return Math.round(n / step) * step;
 }
-
 function minutesToTimeLabel(m: number) {
-  const hh = Math.floor(m / 60);
+  const hh = Math.floor(m / 60) % 24;
   const mm = m % 60;
   const h12 = ((hh + 11) % 12) + 1;
   const ampm = hh >= 12 ? "PM" : "AM";
   return `${h12}:${mm.toString().padStart(2, "0")} ${ampm}`;
 }
-
-function createScheduleItem(at: number, temp: number): ScheduleItem {
+function minutesToInput(m: number) {
+  const hh = Math.floor(m / 60) % 24;
+  const mm = m % 60;
+  return `${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+}
+function createScheduleItem(at: number, end: number, temp: number): ScheduleItem {
   return {
-    id:
-      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
-        ? crypto.randomUUID()
-        : `${Date.now()}-${Math.random()}`,
-    at,
-    temp,
+    id: typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random()}`,
+    at, end, temp,
   };
 }
-
-/** Returns the active scheduled temp for right now, or fallback if schedule is empty. */
 function computeScheduledTemp(
-  schedule: { at: number; temp: number }[],
+  schedule: ScheduleItem[],
   fallback: number
-): number {
-  if (!schedule.length) return fallback;
-
+): { temp: number; activeId: string | null } {
+  if (!schedule.length) return { temp: fallback, activeId: null };
   const now = new Date();
   const minutes = now.getHours() * 60 + now.getMinutes();
-
-  const sorted = [...schedule].sort((a, b) => a.at - b.at);
-  // Walk backwards to find the last entry that has already triggered
-  const active = [...sorted].reverse().find((s) => s.at <= minutes);
-
-  // If nothing triggered yet today, wrap around to the last item of the previous day
-  return active ? active.temp : sorted[sorted.length - 1].temp;
+  for (const item of schedule) {
+    const spansMidnight = item.end <= item.at;
+    const active = spansMidnight
+      ? minutes >= item.at || minutes < item.end
+      : minutes >= item.at && minutes < item.end;
+    if (active) return { temp: item.temp, activeId: item.id };
+  }
+  return { temp: fallback, activeId: null };
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -84,19 +82,185 @@ const MIN_TEMP = 10;
 const MAX_TEMP = 40;
 const HYSTERESIS = 0.5;
 
-// ─── Component ───────────────────────────────────────────────────────────────
+// ─── Mode palette ─────────────────────────────────────────────────────────────
+
+const PALETTE = {
+  HEAT: {
+    ring: "#fb923c",
+    glow: "rgba(251,146,60,0.18)",
+    glowStrong: "rgba(251,146,60,0.35)",
+    text: "text-orange-400",
+    border: "border-orange-500/25",
+    bg: "bg-orange-500/5",
+    led: "bg-orange-400",
+    accent: "#fb923c",
+  },
+  COOL: {
+    ring: "#60a5fa",
+    glow: "rgba(96,165,250,0.18)",
+    glowStrong: "rgba(96,165,250,0.35)",
+    text: "text-blue-400",
+    border: "border-blue-500/25",
+    bg: "bg-blue-500/5",
+    led: "bg-blue-400",
+    accent: "#60a5fa",
+  },
+  AUTO: {
+    ring: "#38bdf8",
+    glow: "rgba(56,189,248,0.15)",
+    glowStrong: "rgba(56,189,248,0.3)",
+    text: "text-sky-400",
+    border: "border-sky-500/25",
+    bg: "bg-sky-500/5",
+    led: "bg-sky-400",
+    accent: "#38bdf8",
+  },
+  OFF: {
+    ring: "#3f3f46",
+    glow: "transparent",
+    glowStrong: "transparent",
+    text: "text-zinc-500",
+    border: "border-zinc-800",
+    bg: "bg-zinc-900/20",
+    led: "bg-zinc-600",
+    accent: "#52525b",
+  },
+};
+
+// ─── Custom temp slider ───────────────────────────────────────────────────────
+
+function TempSlider({
+  value,
+  min = MIN_TEMP,
+  max = MAX_TEMP,
+  step = 0.5,
+  color = "#38bdf8",
+  onChange,
+  onCommit,
+}: {
+  value: number;
+  min?: number;
+  max?: number;
+  step?: number;
+  color?: string;
+  onChange: (v: number) => void;    // local state, instant
+  onCommit: (v: number) => void;    // network call
+}) {
+  const trackRef = useRef<HTMLDivElement>(null);
+  const draggingRef = useRef(false);
+
+  const pct = ((value - min) / (max - min)) * 100;
+
+  const compute = useCallback((clientX: number): number => {
+    if (!trackRef.current) return value;
+    const rect = trackRef.current.getBoundingClientRect();
+    const ratio = clamp((clientX - rect.left) / rect.width, 0, 1);
+    return roundTo(min + ratio * (max - min), step);
+  }, [min, max, step, value]);
+
+  useEffect(() => {
+    const onMove = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      onChange(compute(e.clientX));
+    };
+    const onUp = (e: PointerEvent) => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      const v = compute(e.clientX);
+      onChange(v);
+      onCommit(v);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    return () => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+    };
+  }, [compute, onChange, onCommit]);
+
+  return (
+    <div className="relative flex items-center gap-3 select-none">
+      <span className="text-[10px] tabular-nums text-zinc-600 w-6 text-right shrink-0">
+        {min}°
+      </span>
+
+      {/* Track */}
+      <div
+        ref={trackRef}
+        className="relative flex-1 h-1.5 rounded-full bg-zinc-800 cursor-pointer"
+        onPointerDown={(e) => {
+          draggingRef.current = true;
+          e.currentTarget.setPointerCapture(e.pointerId);
+          const v = compute(e.clientX);
+          onChange(v);
+        }}
+      >
+        {/* Fill */}
+        <div
+          className="absolute inset-y-0 left-0 rounded-full transition-none"
+          style={{ width: `${pct}%`, background: color }}
+        />
+        {/* Thumb */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-4 h-4 rounded-full border-2 bg-zinc-950 shadow-lg transition-none"
+          style={{ left: `${pct}%`, borderColor: color,
+            boxShadow: `0 0 8px ${color}88` }}
+        />
+      </div>
+
+      <span className="text-[10px] tabular-nums text-zinc-600 w-6 shrink-0">
+        {max}°
+      </span>
+
+      {/* Live readout */}
+      <span
+        className="text-sm font-bold tabular-nums w-14 text-right shrink-0"
+        style={{ color }}
+      >
+        {value.toFixed(1)}°C
+      </span>
+    </div>
+  );
+}
+
+// ─── LED dot ──────────────────────────────────────────────────────────────────
+
+function Led({ on, color, label }: { on: boolean; color: string; label: string }) {
+  return (
+    <div className="flex flex-col items-center gap-1.5">
+      <div className="relative w-3 h-3 flex items-center justify-center">
+        {on && (
+          <span className={`absolute inset-0 rounded-full ${color} opacity-50 animate-ping`} />
+        )}
+        <span className={`relative w-3 h-3 rounded-full ${on ? color : "bg-zinc-700"} transition-colors duration-500`} />
+      </div>
+      <span className="text-[9px] uppercase tracking-widest text-zinc-600">{label}</span>
+    </div>
+  );
+}
+
+// ─── Readout row ──────────────────────────────────────────────────────────────
+
+function Row({ label, value, highlight }: { label: string; value: string; highlight?: boolean }) {
+  return (
+    <div className="flex items-center justify-between py-2 border-b border-zinc-800/50 last:border-0">
+      <span className="text-[10px] uppercase tracking-[0.15em] text-zinc-600">{label}</span>
+      <span className={`font-mono text-xs font-semibold ${highlight ? "text-zinc-100" : "text-zinc-400"}`}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 
 export default function ThermostatPage() {
-  // Sensor
   const [sensorReadings, setSensorReadings] = useState<SensorData[]>([]);
   const lastReading = sensorReadings.at(-1);
   const prevReading = sensorReadings.at(-2);
   const lastTempNumber = lastReading?.temp ?? NaN;
-  const lastTemp = Number.isFinite(lastTempNumber)
-    ? lastTempNumber.toFixed(1)
-    : "--";
+  const lastTemp = Number.isFinite(lastTempNumber) ? lastTempNumber.toFixed(1) : "--";
 
-  // Control state (mirrored from server)
   const [mode, setMode] = useState<Mode>("HEAT");
   const [targetTemp, setTargetTemp] = useState(23.0);
   const [useSchedule, setUseSchedule] = useState(true);
@@ -106,69 +270,81 @@ export default function ThermostatPage() {
   const [humidifier, setHumidifier] = useState(false);
   const [heaterStatus, setHeaterStatus] = useState(false);
   const [schedule, setSchedule] = useState<ScheduleItem[]>([
-    createScheduleItem(6 * 60, 22.0),
+    createScheduleItem(6 * 60, 8 * 60, 22.0),
   ]);
-
   const [isSyncing, setIsSyncing] = useState(false);
   const [dragging, setDragging] = useState(false);
 
-  // ─── Derived / computed values ──────────────────────────────────────────
+  // ─── Derived ─────────────────────────────────────────────────────────────
 
-  const scheduledTemp = useMemo(
+  const { temp: scheduledTemp, activeId: activeScheduleId } = useMemo(
     () => computeScheduledTemp(schedule, targetTemp),
     [schedule, targetTemp]
   );
+  const scheduleIsActive = activeScheduleId !== null;
 
-  /**
-   * The temperature the system is actually trying to reach.
-   * Priority: OFF (no target) → Override → Schedule → Manual
-   *
-   * BUG FIX: When mode is OFF we short-circuit immediately so no
-   * actuation logic ever fires based on a stale setpoint.
-   */
   const effectiveSetpoint = useMemo(() => {
-    if (mode === "OFF") return targetTemp; // display only; actuators won't fire
+    if (mode === "OFF") return targetTemp;
     if (overrideMode && overrideSetpoint != null) return overrideSetpoint;
-    return useSchedule ? scheduledTemp : targetTemp;
+    if (useSchedule) return scheduledTemp;
+    return targetTemp;
   }, [mode, overrideMode, overrideSetpoint, useSchedule, scheduledTemp, targetTemp]);
 
-  /**
-   * The mode label shown on the dial.
-   *
-   * BUG FIX: OFF is checked first so override logic can never hijack it.
-   */
   const displayMode = useMemo<Mode>(() => {
     if (mode === "OFF") return "OFF";
-    if (!overrideMode || overrideSetpoint == null) return mode;
-    if (lastTempNumber < overrideSetpoint - HYSTERESIS) return "HEAT";
-    if (lastTempNumber > overrideSetpoint + HYSTERESIS) return "COOL";
+
+    // Determine the setpoint we're actually comparing against
+    const sp = overrideMode && overrideSetpoint != null
+      ? overrideSetpoint
+      : effectiveSetpoint;
+
+    if (!Number.isFinite(lastTempNumber)) return mode; // no sensor data yet
+
+    const needsHeat = lastTempNumber < sp - HYSTERESIS;
+    const needsCool = lastTempNumber > sp + HYSTERESIS;
+
+    if (mode === "HEAT") {
+      // Heater-only: show Heating when below setpoint, Holding when at/above
+      return needsHeat ? "HEAT" : "AUTO";
+    }
+    if (mode === "COOL") {
+      // Cooler-only: show Cooling when above setpoint, Holding when at/below
+      return needsCool ? "COOL" : "AUTO";
+    }
+    // AUTO: show whichever direction is needed
+    if (needsHeat) return "HEAT";
+    if (needsCool) return "COOL";
     return "AUTO";
-  }, [mode, overrideMode, overrideSetpoint, lastTempNumber]);
+  }, [mode, overrideMode, overrideSetpoint, effectiveSetpoint, lastTempNumber]);
 
-  /** True when heater should be on. Never fires when mode is OFF. */
-  const heatCall = useMemo(() => {
-    if (displayMode === "OFF" || displayMode === "COOL") return false;
-    return lastTempNumber < effectiveSetpoint - HYSTERESIS;
-  }, [displayMode, lastTempNumber, effectiveSetpoint]);
-
-  /** True when cooling fan should be on. Never fires when mode is OFF. */
   const coolCall = useMemo(() => {
-    if (displayMode === "OFF" || displayMode === "HEAT") return false;
+    if (displayMode === "OFF") return false;
+    if (mode === "HEAT") return false; // heater-only mode never cools
     return lastTempNumber > effectiveSetpoint + HYSTERESIS;
-  }, [displayMode, lastTempNumber, effectiveSetpoint]);
+  }, [displayMode, mode, lastTempNumber, effectiveSetpoint]);
 
-  // ─── Dial ring arc ──────────────────────────────────────────────────────
+  const pal = PALETTE[displayMode];
 
-  const ringRatio = clamp(
-    (effectiveSetpoint - MIN_TEMP) / (MAX_TEMP - MIN_TEMP),
-    0,
-    1
-  );
-  const circumference = 2 * Math.PI * 88;
+  // ─── Dial arc ─────────────────────────────────────────────────────────────
+
+  const R = 88;
+  const circumference = 2 * Math.PI * R;
+  const ringRatio = clamp((effectiveSetpoint - MIN_TEMP) / (MAX_TEMP - MIN_TEMP), 0, 1);
   const dash = circumference * ringRatio;
   const gap = circumference - dash;
 
-  // ─── API helpers ────────────────────────────────────────────────────────
+  // Tick marks
+  const ticks = Array.from({ length: 31 }, (_, i) => {
+    const angleDeg = -210 + (240 / 30) * i;
+    const rad = (angleDeg * Math.PI) / 180;
+    const major = i % 5 === 0;
+    const outer = major ? 80 : 83;
+    const inner = major ? 73 : 79;
+    return { x1: 100 + outer * Math.cos(rad), y1: 100 + outer * Math.sin(rad),
+             x2: 100 + inner * Math.cos(rad), y2: 100 + inner * Math.sin(rad), major };
+  });
+
+  // ─── API ──────────────────────────────────────────────────────────────────
 
   function applyServerData(data: any) {
     setMode(data.mode);
@@ -177,8 +353,7 @@ export default function ThermostatPage() {
     setSchedule(
       Array.isArray(data.schedule)
         ? data.schedule.map((item: any) =>
-            createScheduleItem(item.at ?? 0, item.temp ?? 0)
-          )
+            createScheduleItem(item.at ?? 0, item.end ?? item.at + 60, item.temp ?? 0))
         : []
     );
     setOverrideMode(data.overrideMode ?? false);
@@ -189,52 +364,30 @@ export default function ThermostatPage() {
   }
 
   async function syncControlState() {
-    try {
-      const res = await fetch("/api/control");
-      applyServerData(await res.json());
-    } catch (err) {
-      console.error("Failed to sync control state", err);
-    }
+    try { applyServerData(await (await fetch("/api/control")).json()); }
+    catch (err) { console.error("Sync failed", err); }
   }
 
   async function sendControlPatch(patch: ControlPatch) {
     setIsSyncing(true);
-    try {
-      const res = await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(patch),
-      });
-      applyServerData(await res.json());
-    } catch (err) {
-      console.error("Failed to update control state", err);
-    } finally {
-      setIsSyncing(false);
-    }
+    try { applyServerData(await (await fetch("/api/control", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })).json()); }
+    catch (err) { console.error("Patch failed", err); }
+    finally { setIsSyncing(false); }
   }
-
-  // ─── Polling ────────────────────────────────────────────────────────────
 
   useEffect(() => {
     async function loadSensors() {
       try {
-        const res = await fetch("/api/readings");
-        const json = await res.json();
-        if (Array.isArray(json)) {
-          setSensorReadings(
-            json.map((row) => ({
-              temp: row.bme_temp,
-              hum: row.scd_hum,
-              co2: row.scd_co2,
-              timestamp: row.timestamp,
-            }))
-          );
-        }
-      } catch {
-        /* keep last known readings */
-      }
+        const json = await (await fetch("/api/readings")).json();
+        if (Array.isArray(json)) setSensorReadings(json.map((row) => ({
+          temp: row.bme_temp, hum: row.scd_hum, co2: row.scd_co2, timestamp: row.timestamp,
+        })));
+      } catch {}
     }
-
     loadSensors();
     const id = setInterval(loadSensors, 5000);
     return () => clearInterval(id);
@@ -246,458 +399,434 @@ export default function ThermostatPage() {
     return () => clearInterval(id);
   }, []);
 
-  // ─── Dial drag handler ──────────────────────────────────────────────────
+  // ─── Dial drag ────────────────────────────────────────────────────────────
 
   function handleDialPointer(e: React.PointerEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect();
     const cx = rect.left + rect.width / 2;
     const cy = rect.top + rect.height / 2;
-    const x = e.clientX - cx;
-    const y = e.clientY - cy;
-
-    const angle = Math.atan2(y, x);
+    const angle = Math.atan2(e.clientY - cy, e.clientX - cx);
     const start = (-210 * Math.PI) / 180;
-    const end = (30 * Math.PI) / 180;
-
+    const end   = (30  * Math.PI) / 180;
     let a = angle;
     while (a < start) a += 2 * Math.PI;
     while (a > start + 2 * Math.PI) a -= 2 * Math.PI;
-
-    const t = (a - start) / (end - start);
-    const ratio = clamp(t, 0, 1);
-    const temp = MIN_TEMP + ratio * (MAX_TEMP - MIN_TEMP);
-    const snapped = roundTo(temp, 0.5);
-
+    const snapped = roundTo(MIN_TEMP + clamp((a - start) / (end - start), 0, 1) * (MAX_TEMP - MIN_TEMP), 0.5);
     setUseSchedule(false);
     setTargetTemp(snapped);
   }
 
-  // ─── Schedule helpers ───────────────────────────────────────────────────
+  // ─── Schedule helpers ─────────────────────────────────────────────────────
+
+  function patchSchedule(next: ScheduleItem[]) {
+    setSchedule(next);
+    sendControlPatch({ schedule: next.map(({ at, end, temp }) => ({ at, end, temp })) });
+  }
 
   function addScheduleItem() {
-    const next = [...schedule, createScheduleItem(12 * 60, 21.0)].sort(
-      (a, b) => a.at - b.at
-    );
-    setSchedule(next);
-    sendControlPatch({ schedule: next.map(({ at, temp }) => ({ at, temp })) });
+    const now = new Date();
+    const at = (now.getHours() + 1) * 60;
+    patchSchedule([...schedule, createScheduleItem(at, at + 60, 22.0)]);
   }
 
-  function updateScheduleTemp(id: string, temp: number) {
-    const next = schedule.map((e) => (e.id === id ? { ...e, temp } : e));
-    setSchedule(next);
-    sendControlPatch({ schedule: next.map(({ at, temp }) => ({ at, temp })) });
+  // LOCAL-only update — instant, no network call
+  function localUpdateTemp(id: string, temp: number) {
+    setSchedule((prev) => prev.map((e) => e.id === id ? { ...e, temp } : e));
   }
 
-  function updateScheduleTime(id: string, at: number) {
-    const next = schedule
-      .map((e) => (e.id === id ? { ...e, at } : e))
-      .sort((a, b) => a.at - b.at);
+  // COMMIT — fires on pointer-up, sends to server
+  function commitTemp(id: string, temp: number) {
+    const next = schedule.map((e) => e.id === id ? { ...e, temp } : e);
     setSchedule(next);
-    sendControlPatch({ schedule: next.map(({ at, temp }) => ({ at, temp })) });
+    sendControlPatch({ schedule: next.map(({ at, end, temp }) => ({ at, end, temp })) });
+  }
+
+  function updateTimeField(id: string, field: "at" | "end", value: number) {
+    const next = schedule.map((e) => e.id === id ? { ...e, [field]: value } : e);
+    patchSchedule(next);
   }
 
   function removeScheduleItem(id: string) {
-    const next = schedule.filter((e) => e.id !== id);
-    setSchedule(next);
-    sendControlPatch({ schedule: next.map(({ at, temp }) => ({ at, temp })) });
+    patchSchedule(schedule.filter((e) => e.id !== id));
   }
 
-  // ─── Dial label helpers ─────────────────────────────────────────────────
+  // ─── Render ───────────────────────────────────────────────────────────────
 
-  const dialLabel = (() => {
-    if (mode === "OFF") return "System Off";
-    if (overrideMode) return "⚠ Override Active";
-    if (displayMode === "HEAT") return "Heating";
-    if (displayMode === "COOL") return "Cooling";
-    return "Holding";
-  })();
-
-  const ringColor = (() => {
-    if (displayMode === "OFF") return "text-zinc-700";
-    if (displayMode === "HEAT") return "text-orange-400";
-    if (displayMode === "COOL") return "text-blue-400";
-    return "text-sky-400";
-  })();
-
-  // ─── Render ─────────────────────────────────────────────────────────────
+  const dialLabel = mode === "OFF" ? "System Off"
+    : overrideMode ? "Override Active"
+    : displayMode === "HEAT" ? "Heating"
+    : displayMode === "COOL" ? "Cooling"
+    : "Holding";
 
   return (
-    <div className="mx-auto max-w-6xl p-4 md:p-8">
+    <div className="mx-auto max-w-6xl p-4 md:p-6 font-mono">
 
       {/* Override banner */}
       {overrideMode && overrideSetpoint != null && (
-        <div className="mb-6 rounded-lg border border-amber-500/50 bg-amber-500/10 p-4 text-center">
-          <div className="text-lg font-semibold text-amber-400">
-            ⚠ Override Mode Active
-          </div>
-          <div className="mt-1 text-sm opacity-80">
-            Holding at {overrideSetpoint}°C — schedule and manual setpoint are
-            paused until override is cleared.
+        <div className="mb-5 flex items-center justify-between gap-4 rounded-xl border border-amber-500/30 bg-amber-500/8 px-4 py-3">
+          <div className="flex items-center gap-3">
+            <span className="h-2 w-2 rounded-full bg-amber-400 animate-pulse" />
+            <span className="text-[10px] uppercase tracking-[0.2em] text-amber-400 font-semibold">
+              Physical Override — {overrideSetpoint}°C
+            </span>
           </div>
           <button
-            onClick={() =>
-              sendControlPatch({ overrideMode: false, overrideSetpoint: null })
-            }
-            className="mt-3 rounded-full border border-amber-500/60 px-4 py-1 text-sm text-amber-400 hover:bg-amber-500/20"
+            onClick={() => sendControlPatch({ overrideMode: false, overrideSetpoint: null })}
+            className="text-[10px] uppercase tracking-widest text-amber-500 border border-amber-500/40 rounded-lg px-3 py-1 hover:bg-amber-500/10 transition-colors"
           >
-            Clear Override
+            Clear
           </button>
         </div>
       )}
 
       {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      <div className="flex items-center justify-between mb-6">
         <div>
-          <h1 className="text-xl font-semibold md:text-2xl">Thermostat</h1>
-          <p className="mt-1 text-sm opacity-70">
-            Schedule → Setpoint → Compare to sensor → Heater + Fan + Humidifier
-          </p>
+          <p className="text-[10px] uppercase tracking-[0.25em] text-zinc-600 mb-0.5">Climate Control</p>
+          <h1 className="text-base font-semibold text-zinc-200 tracking-tight">Thermostat</h1>
         </div>
 
-        {/* Mode selector */}
-        <div className="flex items-center gap-2">
-          {(["HEAT", "COOL", "AUTO", "OFF"] as Mode[]).map((m) => (
-            <button
-              key={m}
-              className={`rounded-full border px-3 py-1 text-sm transition-colors ${
-                mode === m ? "bg-white/10" : "bg-transparent"
-              }`}
-              onClick={() =>
-                sendControlPatch(
+        <div className="flex items-center gap-1.5">
+          {isSyncing && <span className="text-[10px] text-zinc-600 uppercase tracking-widest animate-pulse mr-2">Syncing</span>}
+          {(["HEAT", "COOL", "AUTO", "OFF"] as Mode[]).map((m) => {
+            const active = mode === m;
+            const p = PALETTE[m];
+            return (
+              <button
+                key={m}
+                onClick={() => sendControlPatch(
                   m === "OFF"
-                    ? // BUG FIX: clear override when switching OFF so stale
-                      // setpoints never drive the actuators
-                      { mode: "OFF", overrideMode: false, overrideSetpoint: null }
+                    ? { mode: "OFF", overrideMode: false, overrideSetpoint: null }
                     : { mode: m }
-                )
-              }
-            >
-              {m[0] + m.slice(1).toLowerCase()}
-            </button>
-          ))}
+                )}
+                className={`px-3 py-1.5 text-[10px] uppercase tracking-widest rounded-lg border transition-all duration-200 ${
+                  active
+                    ? `${p.bg} ${p.border} ${p.text}`
+                    : "bg-transparent border-zinc-800 text-zinc-600 hover:border-zinc-700 hover:text-zinc-400"
+                }`}
+              >
+                {m}
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div className="mt-8 grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
 
-        {/* ── Left: Dial + actuator status ── */}
-        <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/40 p-6">
+        {/* ── LEFT: Dial ───────────────────────────────────────────────────── */}
+        <div className="space-y-4">
 
-          <div className="flex items-center justify-between">
-            <div className="text-sm opacity-70">
-              {overrideMode
-                ? "Override setpoint"
-                : useSchedule
-                ? "Scheduled setpoint"
-                : "Manual setpoint"}
-            </div>
-            <button
-              onClick={() =>
-                sendControlPatch({ useSchedule: !useSchedule })
-              }
-              className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
-            >
-              {useSchedule ? "Using Schedule" : "Using Manual"}
-            </button>
-          </div>
-
-          {/* Dial */}
-          <div className="mt-6 flex items-center justify-center">
-            <div
-              className="relative h-[240px] w-[240px] select-none"
-              onPointerDown={(e) => {
-                (e.currentTarget as HTMLDivElement).setPointerCapture(
-                  e.pointerId
-                );
-                setDragging(true);
-                handleDialPointer(e);
-              }}
-              onPointerMove={(e) => dragging && handleDialPointer(e)}
-              onPointerUp={() => {
-                setDragging(false);
-                sendControlPatch({ setpoint: targetTemp, useSchedule: false });
-              }}
-            >
-              <svg className="absolute inset-0" viewBox="0 0 200 200">
-                {/* Track */}
-                <circle
-                  cx="100"
-                  cy="100"
-                  r="88"
-                  stroke="currentColor"
-                  strokeWidth="10"
-                  fill="none"
-                  className="text-zinc-800/70"
-                />
-                {/* Arc */}
-                <circle
-                  cx="100"
-                  cy="100"
-                  r="88"
-                  stroke="currentColor"
-                  strokeWidth="10"
-                  fill="none"
-                  strokeLinecap="round"
-                  strokeDasharray={`${dash} ${gap}`}
-                  transform="rotate(-210 100 100)"
-                  className={ringColor}
-                />
-              </svg>
-
-              <div className="absolute inset-0 flex flex-col items-center justify-center">
-                {/* Status label */}
-                <div
-                  className={`text-xs uppercase tracking-widest ${
-                    overrideMode ? "text-amber-400" : "opacity-60"
-                  }`}
-                >
-                  {dialLabel}
-                </div>
-
-                {/* Setpoint */}
-                <div className="mt-2 text-5xl font-semibold tabular-nums">
-                  {effectiveSetpoint.toFixed(1)}°
-                </div>
-
-                {/* Sensor reading */}
-                {sensorReadings.length > 0 ? (
-                  <div className="mt-2 text-center text-xs opacity-80">
-                    <span className="font-medium">Now: </span>
-                    {lastTemp}°C
-                    {prevReading && (
-                      <span className="ml-1">
-                        {lastTempNumber > prevReading.temp ? (
-                          <span className="text-green-500">▲</span>
-                        ) : lastTempNumber < prevReading.temp ? (
-                          <span className="text-red-500">▼</span>
-                        ) : (
-                          <span className="opacity-40">▬</span>
-                        )}
-                      </span>
-                    )}
-                    {lastReading?.timestamp && (
-                      <span className="ml-2 opacity-60">
-                        (
-                        {new Date(lastReading.timestamp).toLocaleTimeString(
-                          [],
-                          { hour: "2-digit", minute: "2-digit" }
-                        )}
-                        )
-                      </span>
-                    )}
-                  </div>
-                ) : (
-                  <div className="mt-2 text-center text-xs opacity-60">
-                    No sensor data
-                  </div>
-                )}
-
-                {/* +/- buttons — stop pointer events from reaching the dial */}
-                <div
-                  className="mt-4 flex items-center gap-3"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onPointerMove={(e) => e.stopPropagation()}
-                  onPointerUp={(e) => e.stopPropagation()}
-                >
-                  <button
-                    className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
-                    onClick={() => {
-                      const next = clamp(targetTemp - 0.5, MIN_TEMP, MAX_TEMP);
-                      sendControlPatch({ setpoint: next, useSchedule: false });
-                    }}
-                  >
-                    −
-                  </button>
-                  <button
-                    className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
-                    onClick={() => {
-                      const next = clamp(targetTemp + 0.5, MIN_TEMP, MAX_TEMP);
-                      sendControlPatch({ setpoint: next, useSchedule: false });
-                    }}
-                  >
-                    +
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Output status row */}
-          <div className="mt-6 grid gap-3 sm:grid-cols-3">
-            <StatusCard label="Heater Output" value={heaterStatus ? "ON (ESP32)" : "OFF"} />
-            <StatusCard label="Cooling Output" value={coolCall ? "ON (Fan)" : "OFF"} />
-            <StatusCard
-              label="Setpoint Source"
-              value={
-                mode === "OFF"
-                  ? "Off"
-                  : overrideMode
-                  ? "Override"
-                  : useSchedule
-                  ? "Schedule"
-                  : "Manual"
-              }
-            />
-          </div>
-
-          {/* Fan + Humidifier controls */}
-          <div className="mt-6 grid gap-3 sm:grid-cols-2">
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-              <div className="text-sm opacity-60">Cooling Fan (PWM)</div>
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={coolingFan}
-                onChange={(e) =>
-                  sendControlPatch({ cooling_fan: Number(e.target.value) })
-                }
-                className="mt-3 w-full"
-              />
-              <div className="mt-2 text-sm opacity-80">
-                Speed: <span className="font-medium">{coolingFan}%</span>
-              </div>
-            </div>
-
-            <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-              <div className="text-sm opacity-60">Humidifier</div>
+          {/* Dial card */}
+          <div
+            className={`rounded-2xl border ${pal.border} p-6 transition-all duration-700`}
+            style={{ background: `radial-gradient(ellipse at 50% 0%, ${pal.glow} 0%, #09090b 60%)` }}
+          >
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-[10px] uppercase tracking-[0.2em] text-zinc-600">
+                {overrideMode ? "Override" : useSchedule ? scheduleIsActive ? "Schedule Active" : "Schedule (manual fallback)" : "Manual"}
+              </span>
               <button
-                onClick={() =>
-                  sendControlPatch({ humidifier: !humidifier })
-                }
-                className={`mt-3 rounded-lg px-4 py-2 text-sm ${
-                  humidifier
-                    ? "bg-emerald-600 text-white"
-                    : "bg-zinc-800 text-zinc-300"
+                onClick={() => sendControlPatch({ useSchedule: !useSchedule })}
+                className={`text-[10px] uppercase tracking-widest border rounded-lg px-2.5 py-1 transition-colors ${
+                  useSchedule
+                    ? "border-sky-500/40 text-sky-400 bg-sky-500/10"
+                    : "border-zinc-700 text-zinc-500 hover:border-zinc-600 hover:text-zinc-400"
                 }`}
               >
-                {humidifier ? "ON" : "OFF"}
+                {useSchedule ? "Schedule" : "Manual"}
               </button>
+            </div>
+
+            {/* Dial */}
+            <div className="flex justify-center">
+              <div
+                className="relative w-[256px] h-[256px] select-none cursor-grab active:cursor-grabbing"
+                onPointerDown={(e) => {
+                  (e.currentTarget as HTMLDivElement).setPointerCapture(e.pointerId);
+                  setDragging(true);
+                  handleDialPointer(e);
+                }}
+                onPointerMove={(e) => dragging && handleDialPointer(e)}
+                onPointerUp={() => {
+                  setDragging(false);
+                  sendControlPatch({ setpoint: targetTemp, useSchedule: false });
+                }}
+              >
+                <svg className="absolute inset-0 w-full h-full" viewBox="0 0 200 200">
+                  {/* Background glow */}
+                  <defs>
+                    <radialGradient id="dialGlow" cx="50%" cy="50%" r="50%">
+                      <stop offset="0%" stopColor={pal.ring} stopOpacity="0.06" />
+                      <stop offset="100%" stopColor={pal.ring} stopOpacity="0" />
+                    </radialGradient>
+                  </defs>
+                  <circle cx="100" cy="100" r="95" fill="url(#dialGlow)" />
+
+                  {/* Tick marks */}
+                  {ticks.map((t, i) => (
+                    <line key={i} x1={t.x1} y1={t.y1} x2={t.x2} y2={t.y2}
+                      stroke={t.major ? "#3f3f46" : "#27272a"} strokeWidth={t.major ? 1.5 : 1} />
+                  ))}
+
+                  {/* Track (240° arc) */}
+                  <circle cx="100" cy="100" r={R}
+                    fill="none" stroke="#1c1c1e" strokeWidth="7" strokeLinecap="round"
+                    strokeDasharray={`${circumference * 0.667} ${circumference * 0.333}`}
+                    transform="rotate(-210 100 100)" />
+
+                  {/* Active arc */}
+                  <circle cx="100" cy="100" r={R}
+                    fill="none" strokeWidth="7" strokeLinecap="round"
+                    stroke={pal.ring}
+                    strokeDasharray={`${dash} ${gap}`}
+                    transform="rotate(-210 100 100)"
+                    style={{ filter: `drop-shadow(0 0 4px ${pal.ring}88)`, transition: "stroke-dasharray 0.15s ease" }}
+                  />
+
+                  {/* Inner plate */}
+                  <circle cx="100" cy="100" r="68" fill="#0a0a0b" />
+                </svg>
+
+                {/* Center readout */}
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-0.5">
+                  <span className={`text-[9px] uppercase tracking-[0.3em] ${pal.text}`}>
+                    {dialLabel}
+                  </span>
+                  <span className={`text-5xl font-bold tabular-nums leading-none ${pal.text}`}>
+                    {effectiveSetpoint.toFixed(1)}
+                  </span>
+                  <span className="text-[10px] text-zinc-700">°C setpoint</span>
+
+                  {useSchedule && !overrideMode && mode !== "OFF" && (
+                    <span className="text-[9px] text-zinc-600 mt-0.5">
+                      {scheduleIsActive ? "from schedule" : "from manual"}
+                    </span>
+                  )}
+
+                  <div className="mt-2 flex items-center gap-1.5 text-[11px]">
+                    <span className="text-zinc-600">now</span>
+                    <span className="text-zinc-200 font-semibold tabular-nums">{lastTemp}°C</span>
+                    {prevReading && Number.isFinite(lastTempNumber) && (
+                      lastTempNumber > prevReading.temp
+                        ? <span className="text-orange-400 text-[10px]">▲</span>
+                        : lastTempNumber < prevReading.temp
+                        ? <span className="text-blue-400 text-[10px]">▼</span>
+                        : <span className="text-zinc-700 text-[10px]">▬</span>
+                    )}
+                  </div>
+
+                  {/* +/- — swallow pointer events so they don't reach the drag handler */}
+                  <div
+                    className="mt-3 flex items-center gap-2"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onPointerMove={(e) => e.stopPropagation()}
+                    onPointerUp={(e) => e.stopPropagation()}
+                  >
+                    {[["−", -0.5], ["+", 0.5]].map(([label, delta]) => (
+                      <button
+                        key={label as string}
+                        className="w-8 h-8 rounded-full border border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200 text-sm flex items-center justify-center transition-colors"
+                        onClick={() => {
+                          const next = clamp(targetTemp + (delta as number), MIN_TEMP, MAX_TEMP);
+                          sendControlPatch({ setpoint: next, useSchedule: false });
+                        }}
+                      >{label}</button>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* LED row */}
+            <div className="mt-5 pt-4 border-t border-zinc-800/50 flex items-center justify-around">
+              <Led on={heaterStatus} color={PALETTE.HEAT.led} label="Heater" />
+              <Led on={coolCall} color={PALETTE.COOL.led} label="Fan" />
+              <Led on={humidifier} color="bg-teal-400" label="Humid" />
+              <div className="flex flex-col items-center gap-1.5">
+                <span className="text-sm font-bold tabular-nums text-zinc-300">{coolingFan}%</span>
+                <span className="text-[9px] uppercase tracking-widest text-zinc-600">PWM</span>
+              </div>
             </div>
           </div>
 
-          {/* Actuator status summary */}
-          <div className="mt-6 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-4">
-            <div className="text-sm opacity-60">
-              Actuator Status (ESP32 Modules)
+          {/* Readout strip */}
+          <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 px-5 py-4">
+            <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-600 mb-2">Readout</p>
+            <Row label="Effective Setpoint" value={`${effectiveSetpoint.toFixed(1)} °C`} highlight />
+            <Row label="Scheduled Setpoint" value={scheduleIsActive ? `${scheduledTemp.toFixed(1)} °C` : "—"} />
+            <Row label="Manual Setpoint"    value={`${targetTemp.toFixed(1)} °C`} />
+            <Row label="Sensor Temp"        value={`${lastTemp} °C`} highlight />
+            <Row label="Humidity"           value={lastReading ? `${lastReading.hum.toFixed(0)} %` : "--"} />
+            <Row label="CO₂"               value={lastReading ? `${lastReading.co2} ppm` : "--"} />
+            <Row label="Setpoint Source"
+              value={mode === "OFF" ? "OFF" : overrideMode ? "OVERRIDE" : useSchedule && scheduleIsActive ? "SCHEDULE" : "MANUAL"}
+              highlight />
+          </div>
+
+          {/* Fan + Humidifier */}
+          <div className="grid grid-cols-2 gap-4">
+            <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4">
+              <p className="text-[10px] uppercase tracking-[0.15em] text-zinc-600 mb-1">Cooling Fan</p>
+              <p className="text-2xl font-bold tabular-nums text-zinc-200 mb-3">
+                {coolingFan}<span className="text-sm text-zinc-600 ml-1">%</span>
+              </p>
+              <TempSlider
+                value={coolingFan}
+                min={0} max={100} step={1}
+                color={PALETTE.COOL.accent}
+                onChange={(v) => setCoolingFan(v)}
+                onCommit={(v) => sendControlPatch({ cooling_fan: v })}
+              />
             </div>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <ActuatorStatus label="Heater" value={heaterStatus ? "ON" : "OFF"} />
-              <ActuatorStatus label="Cooling Fan" value={`${coolingFan}%`} />
-              <ActuatorStatus label="Humidifier" value={humidifier ? "ON" : "OFF"} />
+
+            <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-4">
+              <p className="text-[10px] uppercase tracking-[0.15em] text-zinc-600 mb-1">Humidifier</p>
+              <p className="text-2xl font-bold tabular-nums text-zinc-200 mb-3">
+                {humidifier ? "ON" : "OFF"}
+              </p>
+              <button
+                onClick={() => sendControlPatch({ humidifier: !humidifier })}
+                className={`w-full py-1.5 rounded-lg text-[10px] font-semibold uppercase tracking-widest border transition-all duration-200 ${
+                  humidifier
+                    ? "bg-teal-500/15 border-teal-500/40 text-teal-400"
+                    : "bg-transparent border-zinc-700 text-zinc-600 hover:border-zinc-600 hover:text-zinc-400"
+                }`}
+              >
+                {humidifier ? "Disable" : "Enable"}
+              </button>
             </div>
           </div>
         </div>
 
-        {/* ── Right: Schedule ── */}
-        <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/40 p-6">
-          <div className="flex items-center justify-between">
+        {/* ── RIGHT: Schedule ──────────────────────────────────────────────── */}
+        <div className="rounded-2xl border border-zinc-800/60 bg-zinc-950/60 p-5 flex flex-col">
+          <div className="flex items-center justify-between mb-5">
             <div>
-              <div className="text-sm font-medium">Daily Schedule</div>
-              <div className="text-xs opacity-70">
-                Edit setpoints used in closed-loop control
-              </div>
+              <p className="text-[10px] uppercase tracking-[0.2em] text-zinc-600">Daily Schedule</p>
+              <p className="text-sm text-zinc-300 mt-0.5">Time ranges · falls back to manual</p>
             </div>
             <button
               onClick={addScheduleItem}
-              className="rounded-full border px-3 py-1 text-sm hover:bg-white/10"
+              className="text-[10px] uppercase tracking-widest border border-zinc-700 rounded-lg px-3 py-1.5 text-zinc-400 hover:text-zinc-200 hover:border-zinc-500 transition-colors"
             >
               + Add
             </button>
           </div>
 
-          <div className="mt-4 space-y-3">
-            {schedule
-              .slice()
-              .sort((a, b) => a.at - b.at)
-              .map((item) => (
+          <div className="space-y-3 flex-1 overflow-y-auto pr-1">
+            {schedule.length === 0 && (
+              <div className="rounded-xl border border-zinc-800/50 border-dashed p-8 text-center text-[11px] text-zinc-600">
+                No ranges — all times use the manual setpoint
+              </div>
+            )}
+
+            {[...schedule].sort((a, b) => a.at - b.at).map((item) => {
+              const isActive = item.id === activeScheduleId;
+              const spansMidnight = item.end <= item.at;
+              const dur = spansMidnight ? 24 * 60 - item.at + item.end : item.end - item.at;
+              const h = Math.floor(dur / 60);
+              const m = dur % 60;
+              const p = isActive ? pal : PALETTE.OFF;
+
+              return (
                 <div
                   key={item.id}
-                  className="grid gap-3 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3"
+                  className={`rounded-xl border p-4 transition-colors duration-300 ${
+                    isActive ? `${p.border} ${p.bg}` : "border-zinc-800/50 bg-zinc-900/30"
+                  }`}
                 >
-                  <div className="flex items-center gap-3">
-                    <div className="w-20 shrink-0 text-sm tabular-nums">
-                      {minutesToTimeLabel(item.at)}
+                  {/* Top row */}
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      {isActive && (
+                        <span className={`h-2 w-2 rounded-full ${pal.led} animate-pulse`} />
+                      )}
+                      <span className={`text-[10px] uppercase tracking-widest font-semibold ${isActive ? pal.text : "text-zinc-600"}`}>
+                        {isActive ? "Active" : "Inactive"}
+                        {spansMidnight && <span className="ml-2 text-amber-500/70">↻ midnight</span>}
+                      </span>
                     </div>
-                    <input
-                      type="range"
-                      min={MIN_TEMP}
-                      max={MAX_TEMP}
-                      step={0.5}
-                      value={item.temp}
-                      onChange={(e) =>
-                        updateScheduleTemp(item.id, Number(e.target.value))
-                      }
-                      className="w-full"
-                    />
-                    <div className="w-12 shrink-0 text-right text-sm tabular-nums">
-                      {item.temp.toFixed(1)}°
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="time"
-                      value={`${String(Math.floor(item.at / 60)).padStart(2, "0")}:${String(item.at % 60).padStart(2, "0")}`}
-                      onChange={(e) => {
-                        const [hh, mm] = e.target.value.split(":").map(Number);
-                        updateScheduleTime(item.id, hh * 60 + mm);
-                      }}
-                      className="w-full rounded-md border border-zinc-800 bg-zinc-950/40 px-2 py-1 text-sm"
-                    />
                     <button
                       onClick={() => removeScheduleItem(item.id)}
-                      className="rounded-md border border-zinc-800 px-2 py-1 text-sm hover:bg-white/10"
+                      className="text-[10px] text-zinc-700 hover:text-red-400 border border-zinc-800 hover:border-red-500/30 rounded-lg px-2 py-0.5 transition-colors"
                     >
-                      Remove
+                      ✕
                     </button>
                   </div>
+
+                  {/* Time pickers */}
+                  <div className="grid grid-cols-2 gap-2 mb-3">
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-zinc-600 mb-1">Start</p>
+                      <input
+                        type="time"
+                        value={minutesToInput(item.at)}
+                        onChange={(e) => {
+                          const [hh, mm] = e.target.value.split(":").map(Number);
+                          updateTimeField(item.id, "at", hh * 60 + mm);
+                        }}
+                        className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-xs text-zinc-300 focus:border-zinc-600 outline-none transition-colors"
+                      />
+                    </div>
+                    <div>
+                      <p className="text-[9px] uppercase tracking-wider text-zinc-600 mb-1">End</p>
+                      <input
+                        type="time"
+                        value={minutesToInput(item.end)}
+                        onChange={(e) => {
+                          const [hh, mm] = e.target.value.split(":").map(Number);
+                          updateTimeField(item.id, "end", hh * 60 + mm);
+                        }}
+                        className="w-full rounded-lg border border-zinc-800 bg-zinc-900/60 px-2 py-1.5 text-xs text-zinc-300 focus:border-zinc-600 outline-none transition-colors"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Temp slider — smooth, no network spam */}
+                  <TempSlider
+                    value={item.temp}
+                    color={isActive ? pal.accent : PALETTE.AUTO.accent}
+                    onChange={(v) => localUpdateTemp(item.id, v)}
+                    onCommit={(v) => commitTemp(item.id, v)}
+                  />
+
+                  {/* Duration footer */}
+                  <p className="mt-2.5 text-[9px] text-zinc-700 text-right tabular-nums">
+                    {minutesToTimeLabel(item.at)} → {minutesToTimeLabel(item.end)}
+                    {" "}({h > 0 ? `${h}h ` : ""}{m > 0 ? `${m}m` : ""})
+                  </p>
                 </div>
-              ))}
+              );
+            })}
           </div>
 
-          {/* Schedule summary */}
-          <div className="mt-4 rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3 text-sm">
-            <div className="opacity-70">Right now (based on time):</div>
-            <div className="mt-1">
-              Scheduled setpoint:{" "}
-              <span className="font-medium tabular-nums">
-                {scheduledTemp.toFixed(1)}°C
+          {/* Footer summary */}
+          <div className="mt-4 pt-4 border-t border-zinc-800/50 space-y-1.5">
+            <div className="flex justify-between text-[10px]">
+              <span className="uppercase tracking-widest text-zinc-600">Manual Setpoint</span>
+              <span className="font-bold tabular-nums text-zinc-400">{targetTemp.toFixed(1)}°C</span>
+            </div>
+            <div className="flex justify-between text-[10px]">
+              <span className="uppercase tracking-widest text-zinc-600">
+                {scheduleIsActive ? "Active Range" : "No Range Active"}
               </span>
-              {" · "}
-              Effective setpoint:{" "}
-              <span className="font-medium tabular-nums">
-                {effectiveSetpoint.toFixed(1)}°C
+              <span className="font-bold tabular-nums text-zinc-400">
+                {scheduleIsActive ? `${scheduledTemp.toFixed(1)}°C` : "—"}
               </span>
             </div>
+            <div className="flex justify-between text-[11px] border-t border-zinc-800/50 pt-1.5">
+              <span className="uppercase tracking-widest text-zinc-500">Effective</span>
+              <span className={`font-bold tabular-nums ${pal.text}`}>{effectiveSetpoint.toFixed(1)}°C</span>
+            </div>
             {overrideMode && (
-              <div className="mt-2 text-amber-400 text-xs">
-                ⚠ Override is active — effective setpoint is locked to{" "}
-                {overrideSetpoint}°C regardless of schedule.
-              </div>
+              <p className="text-[9px] text-amber-400/80 uppercase tracking-widest pt-0.5">
+                ⚠ Override active — schedule paused
+              </p>
             )}
           </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-
-function StatusCard({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-xl border border-zinc-800/60 bg-zinc-950/30 p-3">
-      <div className="text-xs opacity-60">{label}</div>
-      <div className="mt-1 text-sm font-medium">{value}</div>
-    </div>
-  );
-}
-
-function ActuatorStatus({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-xs opacity-60">{label}</div>
-      <div className="mt-1 text-sm font-medium">{value}</div>
     </div>
   );
 }
